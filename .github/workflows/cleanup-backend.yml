@@ -1,0 +1,29 @@
+name: 'OficinaPro - Cleanup Infra Backend'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup_backend:
+    name: 'Terraform Destroy S3 Backend'
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+    - name: 'Checkout'
+      uses: actions/checkout@v3
+
+    - name: 'Setup Terraform'
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+
+    - name: 'Terraform Init'
+      run: terraform init
+      working-directory: ./bootstrap
+
+    - name: 'Terraform Destroy'
+      run: terraform destroy -auto-approve
+      working-directory: ./bootstrap
