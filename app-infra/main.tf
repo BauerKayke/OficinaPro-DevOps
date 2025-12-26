@@ -58,56 +58,78 @@ data "aws_ami" "ubuntu" {
 
 # --- RECURSOS DA APLICAÇÃO ---
 
-# Security Group para K3s
+# Security Group para K3s (Regras separadas para evitar conflitos)
 resource "aws_security_group" "k3s_sg" {
   name        = "${var.project_name}-k3s-sg"
   description = "Security group para o cluster K3s"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id # VEM DA REDE
 
-  # Ingress (entradas)
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "SSH"
-  }
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTP"
-  }
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTPS"
-  }
-  ingress {
-    from_port   = 6443 # K3s API
-    to_port     = 6443
-    protocol    = "tcp"
-    # IMPORTANTE: Liberar acesso externo à API do K3s para o Terraform/Helm poder conectar
-    # Em produção, restrinja ao IP do runner ou use bastion
-    cidr_blocks = ["0.0.0.0/0"] 
-    description = "K3s API server externo"
-  }
-  
-  # Egress (saídas) - permite toda a comunicação de saída
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = { Name = "${var.project_name}-k3s-sg" }
 }
 
-# Key Pair - Atualizado para v4 para forçar recriação com TLS SAN
+# Regras de Ingress (Entrada)
+resource "aws_security_group_rule" "ingress_ssh" {
+  type              = "ingress"
+  from_port         = 22
+  to_port           = 22
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k3s_sg.id
+  description       = "SSH"
+}
+
+resource "aws_security_group_rule" "ingress_http" {
+  type              = "ingress"
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k3s_sg.id
+  description       = "HTTP"
+}
+
+resource "aws_security_group_rule" "ingress_https" {
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k3s_sg.id
+  description       = "HTTPS"
+}
+
+resource "aws_security_group_rule" "ingress_k3s_api" {
+  type              = "ingress"
+  from_port         = 6443
+  to_port           = 6443
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k3s_sg.id
+  description       = "K3s API server externo"
+}
+
+resource "aws_security_group_rule" "ingress_k3s_internal" {
+  type              = "ingress"
+  from_port         = 0
+  to_port           = 65535
+  protocol          = "-1"
+  self              = true
+  security_group_id = aws_security_group.k3s_sg.id
+  description       = "Comunicacao interna entre nodes/pods"
+}
+
+# Regras de Egress (Saída)
+resource "aws_security_group_rule" "egress_all" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k3s_sg.id
+  description       = "Permitir toda saida"
+}
+
+# Key Pair
 resource "aws_key_pair" "budget_key" {
   key_name   = "${var.project_name}-budget-key-v4"
   public_key = var.ssh_public_key
