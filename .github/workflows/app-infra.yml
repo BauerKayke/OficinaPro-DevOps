@@ -31,8 +31,10 @@ jobs:
 
     - name: 'Setup SSH Key'
       run: |
-        # Usando printf para garantir quebras de linha corretas no arquivo PEM
-        printf "%s\n" "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
+        # Cria o arquivo da chave
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
+        # Garante uma quebra de linha no final para satisfazer o formato PEM/OpenSSH
+        echo "" >> private_key.pem
         chmod 600 private_key.pem
         echo "TF_VAR_ssh_private_key_path=$(pwd)/private_key.pem" >> $GITHUB_ENV
       shell: bash
