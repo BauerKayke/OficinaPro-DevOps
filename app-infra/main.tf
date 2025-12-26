@@ -58,13 +58,13 @@ data "aws_ami" "ubuntu" {
 
 # --- RECURSOS DA APLICAÇÃO ---
 
-# Security Group para K3s (Regras separadas para evitar conflitos)
+# Security Group para K3s (Renomeado para v2 para forçar recriação limpa)
 resource "aws_security_group" "k3s_sg" {
-  name        = "${var.project_name}-k3s-sg"
+  name        = "${var.project_name}-k3s-sg-v2"
   description = "Security group para o cluster K3s"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id # VEM DA REDE
 
-  tags = { Name = "${var.project_name}-k3s-sg" }
+  tags = { Name = "${var.project_name}-k3s-sg-v2" }
 }
 
 # Regras de Ingress (Entrada)
@@ -229,6 +229,8 @@ resource "helm_release" "newrelic_k8s" {
   create_namespace = true
   version    = "5.0.25"
   timeout    = 600
+  replace    = true  # Forçar substituição se já existir (útil se falhou antes)
+  force_update = true
 
   set {
     name  = "global.licenseKey"
