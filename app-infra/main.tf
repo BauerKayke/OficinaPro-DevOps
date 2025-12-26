@@ -5,6 +5,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.11.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.23.0"
+    }
   }
 }
 
@@ -12,17 +20,29 @@ provider "aws" {
   region = var.aws_region
 }
 
-# --- DATA SOURCE: LER O ESTADO DO BANCO DE DADOS ---
+# --- DATA SOURCES: LER ESTADOS ---
+
+# Lê o estado da REDE (VPC, Subnets)
+data "terraform_remote_state" "network" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-kb-tfstate"
+    key    = "oficinapro/network/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
+# Lê o estado do BANCO (Endpoint)
 data "terraform_remote_state" "database" {
   backend = "s3"
   config = {
-    bucket = "oficinapro-tfstate-bucket-unique-name"
+    bucket = "fiap-oficinapro-kb-tfstate"
     key    = "oficinapro/database/terraform.tfstate"
     region = var.aws_region
   }
 }
 
-# Data sources
+# Data sources locais
 data "aws_availability_zones" "available" {
   state = "available"
 }
@@ -36,60 +56,13 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# --- RECURSOS DE REDE E COMPUTAÇÃO ---
-
-# VPC, Subnets, IGW, Route Tables...
-resource "aws_vpc" "budget_vpc" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  tags = { Name = "${var.project_name}-budget-vpc" }
-}
-
-resource "aws_internet_gateway" "budget_igw" {
-  vpc_id = aws_vpc.budget_vpc.id
-  tags = { Name = "${var.project_name}-budget-igw" }
-}
-
-resource "aws_subnet" "budget_public_subnet_1" {
-  vpc_id                  = aws_vpc.budget_vpc.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[0]
-  map_public_ip_on_launch = true
-  tags = { Name = "${var.project_name}-budget-public-subnet-1" }
-}
-
-resource "aws_subnet" "budget_public_subnet_2" {
-  vpc_id                  = aws_vpc.budget_vpc.id
-  cidr_block              = "10.0.2.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[1]
-  map_public_ip_on_launch = true
-  tags = { Name = "${var.project_name}-budget-public-subnet-2" }
-}
-
-resource "aws_route_table" "budget_public_rt" {
-  vpc_id = aws_vpc.budget_vpc.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.budget_igw.id
-  }
-  tags = { Name = "${var.project_name}-budget-public-rt" }
-}
-
-resource "aws_route_table_association" "budget_public_rta_1" {
-  subnet_id      = aws_subnet.budget_public_subnet_1.id
-  route_table_id = aws_route_table.budget_public_rt.id
-}
-
-resource "aws_route_table_association" "budget_public_rta_2" {
-  subnet_id      = aws_subnet.budget_public_subnet_2.id
-  route_table_id = aws_route_table.budget_public_rt.id
-}
+# --- RECURSOS DA APLICAÇÃO ---
 
 # Security Group para K3s
 resource "aws_security_group" "k3s_sg" {
   name        = "${var.project_name}-k3s-sg"
   description = "Security group para o cluster K3s"
-  vpc_id      = aws_vpc.budget_vpc.id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id # VEM DA REDE
 
   # Ingress (entradas)
   ingress {
@@ -143,7 +116,8 @@ resource "aws_instance" "k3s_node" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
   key_name      = aws_key_pair.budget_key.key_name
-  subnet_id     = aws_subnet.budget_public_subnet_1.id
+  # Pega a primeira subnet pública da rede
+  subnet_id     = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
   vpc_security_group_ids = [aws_security_group.k3s_sg.id]
 
   root_block_device {
@@ -155,10 +129,10 @@ resource "aws_instance" "k3s_node" {
     github_repo     = var.github_repo,
     github_token    = var.github_token,
     aws_region      = var.aws_region,
-    db_host         = data.terraform_remote_state.database.outputs.db_instance_address,
+    db_host         = data.terraform_remote_state.database.outputs.db_instance_address, # VEM DO BANCO
     db_name         = data.terraform_remote_state.database.outputs.db_instance_name,
     db_username     = data.terraform_remote_state.database.outputs.db_instance_username,
-    db_password     = nonsensitive(data.terraform_remote_state.database.outputs.db_instance_password_secret), # Assumindo que a senha é output de um secret
+    db_password     = var.db_password, # Agora passamos a variável local, mais seguro que ler output sensitive se possível
     instance_type   = var.instance_type,
     eip_allocation_id = aws_eip.k3s_eip.id,
     scripts_version = var.scripts_version
@@ -176,4 +150,62 @@ resource "aws_eip" "k3s_eip" {
 resource "aws_eip_association" "eip_assoc" {
   instance_id   = aws_instance.k3s_node.id
   allocation_id = aws_eip.k3s_eip.id
+}
+
+# ... (Configurações do Helm/New Relic/Kubernetes continuam aqui, inalteradas) ...
+# Vou manter o restante do arquivo original para não perder o helm_release
+# ...
+
+provider "kubernetes" {
+  config_path = "~/.kube/config"
+}
+
+provider "helm" {
+  kubernetes {
+    config_path = "~/.kube/config"
+  }
+}
+
+resource "null_resource" "get_kubeconfig" {
+  depends_on = [aws_instance.k3s_node]
+
+  provisioner "local-exec" {
+    command = "sleep 60 && scp -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/etc/rancher/k3s/k3s.yaml ~/.kube/config"
+  }
+
+  triggers = {
+    instance_id = aws_instance.k3s_node.id
+  }
+}
+
+resource "helm_release" "newrelic_k8s" {
+  depends_on = [null_resource.get_kubeconfig]
+
+  name       = "newrelic-bundle"
+  repository = "https://helm-charts.newrelic.com"
+  chart      = "nri-bundle"
+  namespace  = "newrelic"
+  create_namespace = true
+  version    = "5.0.25"
+
+  set {
+    name  = "global.licenseKey"
+    value = var.newrelic_license_key
+  }
+  set {
+    name  = "global.cluster"
+    value = "${var.project_name}-cluster"
+  }
+  set {
+    name  = "newrelic-infrastructure.enabled"
+    value = "true"
+  }
+  set {
+    name  = "kube-state-metrics.enabled"
+    value = "true"
+  }
+  set {
+    name  = "opentelemetry.enabled"
+    value = "true"
+  }
 }
