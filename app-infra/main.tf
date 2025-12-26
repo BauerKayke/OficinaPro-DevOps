@@ -152,10 +152,6 @@ resource "aws_eip_association" "eip_assoc" {
   allocation_id = aws_eip.k3s_eip.id
 }
 
-# ... (Configurações do Helm/New Relic/Kubernetes continuam aqui, inalteradas) ...
-# Vou manter o restante do arquivo original para não perder o helm_release
-# ...
-
 provider "kubernetes" {
   config_path = "~/.kube/config"
 }
@@ -170,7 +166,8 @@ resource "null_resource" "get_kubeconfig" {
   depends_on = [aws_instance.k3s_node]
 
   provisioner "local-exec" {
-    command = "sleep 60 && scp -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/etc/rancher/k3s/k3s.yaml ~/.kube/config"
+    # Ajustado para copiar do home do usuário ubuntu onde temos permissão
+    command = "sleep 60 && scp -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config"
   }
 
   triggers = {

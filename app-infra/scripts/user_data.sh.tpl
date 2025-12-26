@@ -35,6 +35,12 @@ cp /etc/rancher/k3s/k3s.yaml /root/.kube/config
 chmod 600 /root/.kube/config
 export KUBECONFIG=/root/.kube/config
 
+# Configurar acesso para o usuário ubuntu (para permitir SCP)
+mkdir -p /home/ubuntu/.kube
+cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
+chown -R ubuntu:ubuntu /home/ubuntu/.kube
+chmod 600 /home/ubuntu/.kube/config
+
 # Instalar kubectl
 curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
