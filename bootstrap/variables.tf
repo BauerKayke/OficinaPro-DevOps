@@ -9,7 +9,7 @@ variable "aws_region" {
 variable "s3_bucket_name" {
   description = "Nome único global para o bucket S3 que armazenará o estado do Terraform."
   type        = string
-  default     = "oficinapro-tfstate-bucket-unique-name" # IMPORTANTE: Troque por um nome único!
+  default     = "fiap-oficinapro-kb-tfstate" # Nome único baseado no projeto
 }
 
 variable "dynamodb_table_name" {
