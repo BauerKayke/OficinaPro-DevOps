@@ -21,7 +21,7 @@ variable "instance_type" {
 variable "spot_max_price" {
   description = "Preço máximo para a Spot Instance (otimizado para Free Tier)"
   type        = string
-  default     = "0.007" # Preço baixo para t3.micro
+  default     = "0.007"
 }
 
 variable "ssh_public_key" {
@@ -44,4 +44,23 @@ variable "scripts_version" {
   description = "Versão dos scripts de bootstrap para forçar atualização do user_data"
   type        = string
   default     = "v1.0.0"
+}
+
+variable "db_password" {
+  description = "Senha do banco de dados (necessária para configurar a aplicação no boot)"
+  type        = string
+  sensitive   = true
+}
+
+# --- Variáveis New Relic & SSH ---
+
+variable "newrelic_license_key" {
+  description = "Chave de licença de ingestão do New Relic"
+  type        = string
+  sensitive   = true
+}
+
+variable "ssh_private_key_path" {
+  description = "Caminho para a chave SSH privada para acessar a instância EC2 (para copiar kubeconfig)"
+  type        = string
 }
