@@ -105,9 +105,9 @@ resource "aws_security_group" "k3s_sg" {
   tags = { Name = "${var.project_name}-k3s-sg" }
 }
 
-# Key Pair
+# Key Pair - ALTERADO NOME PARA FORÇAR RECRIAÇÃO DA INSTÂNCIA
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key"
+  key_name   = "${var.project_name}-budget-key-v2"
   public_key = var.ssh_public_key
 }
 
@@ -167,7 +167,8 @@ resource "null_resource" "get_kubeconfig" {
 
   provisioner "local-exec" {
     # Ajustado para copiar do home do usuário ubuntu onde temos permissão
-    command = "sleep 60 && scp -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config"
+    # Aumentei o sleep para dar mais tempo do user_data rodar
+    command = "sleep 90 && scp -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config"
   }
 
   triggers = {
