@@ -1,9 +1,10 @@
 terraform {
   backend "s3" {
     bucket         = "fiap-oficinapro-kb-tfstate"
-    key            = "oficinapro/app-infra/terraform.tfstate" # <-- Chave específica para a infra da app
+    key            = "oficinapro/auth-infra/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "oficinapro-tfstate-lock-table"
     encrypt        = true
   }
 }
+
