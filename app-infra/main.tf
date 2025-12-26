@@ -58,13 +58,17 @@ data "aws_ami" "ubuntu" {
 
 # --- RECURSOS DA APLICAÇÃO ---
 
-# Security Group para K3s (Renomeado para v2 para forçar recriação limpa)
+# Security Group para K3s (Renomeado para v3 para forçar recriação limpa)
 resource "aws_security_group" "k3s_sg" {
-  name        = "${var.project_name}-k3s-sg-v2"
+  name        = "${var.project_name}-k3s-sg-v3"
   description = "Security group para o cluster K3s"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id # VEM DA REDE
 
-  tags = { Name = "${var.project_name}-k3s-sg-v2" }
+  tags = { Name = "${var.project_name}-k3s-sg-v3" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Regras de Ingress (Entrada)
@@ -131,7 +135,7 @@ resource "aws_security_group_rule" "egress_all" {
 
 # Key Pair
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v4"
+  key_name   = "${var.project_name}-budget-key-v5"
   public_key = var.ssh_public_key
 }
 
