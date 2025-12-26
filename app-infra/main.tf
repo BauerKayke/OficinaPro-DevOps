@@ -107,9 +107,9 @@ resource "aws_security_group" "k3s_sg" {
   tags = { Name = "${var.project_name}-k3s-sg" }
 }
 
-# Key Pair
+# Key Pair - Atualizado para v4 para forçar recriação com TLS SAN
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v3"
+  key_name   = "${var.project_name}-budget-key-v4"
   public_key = var.ssh_public_key
 }
 
@@ -206,6 +206,7 @@ resource "helm_release" "newrelic_k8s" {
   namespace  = "newrelic"
   create_namespace = true
   version    = "5.0.25"
+  timeout    = 600
 
   set {
     name  = "global.licenseKey"

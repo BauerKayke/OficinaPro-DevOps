@@ -25,8 +25,11 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docke
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
 
-# Instalar K3s (versão otimizada)
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--docker --disable=traefik --disable=servicelb" sh -
+# Obter IP Público para o TLS SAN
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+
+# Instalar K3s (versão otimizada) com TLS SAN para permitir acesso externo
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--docker --disable=traefik --disable=servicelb --tls-san $PUBLIC_IP" sh -
 
 # Aguardar o K3s ficar pronto
 sleep 30
