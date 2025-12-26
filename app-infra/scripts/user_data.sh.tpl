@@ -53,7 +53,8 @@ unzip awscliv2.zip
 aws ec2 associate-address --instance-id $(curl -s http://169.254.169.254/latest/meta-data/instance-id) --allocation-id $EIP_ALLOCATION_ID --region $AWS_REGION
 
 # Clonar o repositório da aplicação
-git clone https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git /app
+# Usando variáveis do shell ($VAR) em vez de template (${VAR}) para evitar conflito com o Terraform
+git clone https://$GITHUB_TOKEN@github.com/$GITHUB_REPO.git /app
 
 # Navegar para o diretório de deploy e aplicar os manifestos Kubernetes
 cd /app/deployment/kubernetes
