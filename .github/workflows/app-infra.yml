@@ -23,7 +23,7 @@ jobs:
       TF_VAR_github_repo: ${{ secrets.GH_REPO_URL }}
       TF_VAR_github_token: ${{ secrets.GH_TOKEN }}
       TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
-      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }} # Adicionado
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
 
     steps:
     - name: 'Checkout'
@@ -31,7 +31,8 @@ jobs:
 
     - name: 'Setup SSH Key'
       run: |
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
+        # Usando printf para garantir quebras de linha corretas no arquivo PEM
+        printf "%s\n" "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
         chmod 600 private_key.pem
         echo "TF_VAR_ssh_private_key_path=$(pwd)/private_key.pem" >> $GITHUB_ENV
       shell: bash
