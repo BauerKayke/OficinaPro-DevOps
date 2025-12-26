@@ -105,9 +105,9 @@ resource "aws_security_group" "k3s_sg" {
   tags = { Name = "${var.project_name}-k3s-sg" }
 }
 
-# Key Pair - ALTERADO NOME PARA FORÇAR RECRIAÇÃO DA INSTÂNCIA
+# Key Pair - Atualizado para v3 para forçar recriação
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v2"
+  key_name   = "${var.project_name}-budget-key-v3"
   public_key = var.ssh_public_key
 }
 
@@ -166,9 +166,20 @@ resource "null_resource" "get_kubeconfig" {
   depends_on = [aws_instance.k3s_node]
 
   provisioner "local-exec" {
-    # Ajustado para copiar do home do usuário ubuntu onde temos permissão
-    # Aumentei o sleep para dar mais tempo do user_data rodar
-    command = "sleep 90 && scp -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config"
+    # Loop de retry robusto para aguardar o user_data terminar
+    command = <<EOT
+      echo "Aguardando user_data finalizar e criar kubeconfig..."
+      for i in {1..50}; do
+        if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config; then
+          echo "Kubeconfig copiado com sucesso!"
+          exit 0
+        fi
+        echo "Tentativa $i falhou. Aguardando 10s..."
+        sleep 10
+      done
+      echo "Falha ao copiar kubeconfig após várias tentativas."
+      exit 1
+    EOT
   }
 
   triggers = {
