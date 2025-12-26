@@ -90,8 +90,10 @@ resource "aws_security_group" "k3s_sg" {
     from_port   = 6443 # K3s API
     to_port     = 6443
     protocol    = "tcp"
-    self        = true
-    description = "K3s API server interno"
+    # IMPORTANTE: Liberar acesso externo à API do K3s para o Terraform/Helm poder conectar
+    # Em produção, restrinja ao IP do runner ou use bastion
+    cidr_blocks = ["0.0.0.0/0"] 
+    description = "K3s API server externo"
   }
   
   # Egress (saídas) - permite toda a comunicação de saída
@@ -153,12 +155,14 @@ resource "aws_eip_association" "eip_assoc" {
 }
 
 provider "kubernetes" {
-  config_path = "~/.kube/config"
+  config_path    = "~/.kube/config"
+  insecure       = true # Necessário pois o IP no cert do K3s pode não bater com o IP público
 }
 
 provider "helm" {
   kubernetes {
     config_path = "~/.kube/config"
+    insecure    = true # Necessário pois o IP no cert do K3s pode não bater com o IP público
   }
 }
 
@@ -173,6 +177,10 @@ resource "null_resource" "get_kubeconfig" {
       for i in {1..50}; do
         if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config; then
           echo "Kubeconfig copiado com sucesso na tentativa $i!"
+          
+          # Substituir 127.0.0.1 pelo IP Público da instância
+          sed -i 's/127.0.0.1/${aws_eip.k3s_eip.public_ip}/g' ~/.kube/config
+          
           exit 0
         fi
         echo "Tentativa $i falhou. Aguardando 10s..."
