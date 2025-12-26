@@ -192,7 +192,8 @@ resource "null_resource" "get_kubeconfig" {
   }
 
   triggers = {
-    instance_id = aws_instance.k3s_node.id
+    # Forçar execução a cada apply para garantir que o arquivo exista no runner
+    always_run = "${timestamp()}"
   }
 }
 
