@@ -26,6 +26,7 @@ jobs:
       TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
       TF_VAR_db_password: ${{ secrets.DB_PASSWORD }} # Senha do RDS
       TF_VAR_ssh_private_key_path: "./private_key.pem" # Caminho para a chave privada
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }} # Chave pública para o Key Pair
 
     defaults:
       run:
@@ -54,7 +55,8 @@ jobs:
     - name: Terraform Init
       run: terraform init
 
-    # --- FIX: Destrancar estado preso (Executar apenas uma vez e remover) ---
+    # --- FIX: Destrancar estado preso (Executar se houve cancelamento anterior) ---
+    # Se o lock ID mudar, atualize aqui.
     - name: Force Unlock State
       run: terraform force-unlock -force 826a8ea9-3791-fd62-c2c5-a24817886dbb || true
     
