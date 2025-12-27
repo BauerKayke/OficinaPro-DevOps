@@ -54,23 +54,18 @@ jobs:
 
     - name: Terraform Init
       run: terraform init
-
-    # --- FIX: Destrancar estado preso (Executar se houve cancelamento anterior) ---
-    # Se o lock ID mudar, atualize aqui.
-    - name: Force Unlock State
-      run: terraform force-unlock -force 826a8ea9-3791-fd62-c2c5-a24817886dbb || true
     
     - name: Terraform Validate
       run: terraform validate
 
     - name: Terraform Plan
       if: ${{ github.event.inputs.action == 'apply' }}
-      run: terraform plan -out=tfplan
+      run: terraform plan -lock=false -out=tfplan
 
     - name: Terraform Apply
       if: ${{ github.event.inputs.action == 'apply' }}
       # O apply agora apenas cria a infra e baixa o kubeconfig via null_resource
-      run: terraform apply -auto-approve tfplan
+      run: terraform apply -lock=false -auto-approve tfplan
 
     # --- NOVO STEP: Instalar New Relic via Helm (Shell) ---
     - name: Install New Relic Bundle via Helm
@@ -96,4 +91,4 @@ jobs:
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
-      run: terraform destroy -auto-approve
+      run: terraform destroy -lock=false -auto-approve
