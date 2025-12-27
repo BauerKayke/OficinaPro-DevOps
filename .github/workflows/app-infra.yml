@@ -54,6 +54,10 @@ jobs:
     - name: Terraform Init
       run: terraform init
 
+    # --- FIX: Destrancar estado preso (Executar apenas uma vez e remover) ---
+    - name: Force Unlock State
+      run: terraform force-unlock -force 826a8ea9-3791-fd62-c2c5-a24817886dbb || true
+    
     - name: Terraform Validate
       run: terraform validate
 
