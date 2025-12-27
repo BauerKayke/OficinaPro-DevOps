@@ -78,6 +78,10 @@ jobs:
         echo "Instalando/Atualizando New Relic Bundle..."
         # O kubeconfig já foi configurado pelo null_resource do Terraform em ~/.kube/config
         
+        # Limpar instalação anterior pendente/travada
+        echo "Tentando limpar instalação anterior..."
+        helm uninstall newrelic-bundle --namespace newrelic --wait || true
+        
         helm upgrade --install newrelic-bundle newrelic/nri-bundle \
           --namespace newrelic \
           --create-namespace \
