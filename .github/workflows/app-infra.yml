@@ -39,12 +39,6 @@ jobs:
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
 
-    # Instala o Helm no Runner
-    - name: Setup Helm
-      uses: azure/setup-helm@v4
-      with:
-        version: 'v3.13.3'
-
     - name: Setup SSH Key
       run: |
         echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
@@ -66,35 +60,6 @@ jobs:
       if: ${{ github.event.inputs.action == 'apply' }}
       # O apply agora apenas cria a infra e baixa o kubeconfig via null_resource
       run: terraform apply -lock=false -auto-approve tfplan
-
-    # --- NOVO STEP: Instalar New Relic via Helm (Shell) ---
-    - name: Install New Relic Bundle via Helm
-      if: ${{ github.event.inputs.action == 'apply' }}
-      run: |
-        echo "Adicionando repositório Helm do New Relic..."
-        helm repo add newrelic https://helm-charts.newrelic.com
-        helm repo update
-
-        echo "Instalando/Atualizando New Relic Bundle..."
-        # O kubeconfig já foi configurado pelo null_resource do Terraform em ~/.kube/config
-        
-        # Limpar instalação anterior pendente/travada
-        echo "Tentando limpar instalação anterior..."
-        helm uninstall newrelic-bundle --namespace newrelic --wait || true
-        
-        helm upgrade --install newrelic-bundle newrelic/nri-bundle \
-          --namespace newrelic \
-          --create-namespace \
-          --set global.licenseKey=${{ secrets.NEW_RELIC_LICENSE_KEY }} \
-          --set global.cluster=OficinaPro-KaykeBauer-cluster \
-          --set newrelic-infrastructure.enabled=true \
-          --set kube-state-metrics.enabled=true \
-          --set opentelemetry.enabled=false \
-          --set nri-prometheus.enabled=false \
-          --set nri-metadata-injection.enabled=false \
-          --set webhook.enabled=false \
-          --timeout 10m \
-          --wait
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
