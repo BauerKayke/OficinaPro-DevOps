@@ -89,7 +89,10 @@ jobs:
           --set global.cluster=OficinaPro-KaykeBauer-cluster \
           --set newrelic-infrastructure.enabled=true \
           --set kube-state-metrics.enabled=true \
-          --set opentelemetry.enabled=true \
+          --set opentelemetry.enabled=false \
+          --set nri-prometheus.enabled=false \
+          --set nri-metadata-injection.enabled=false \
+          --set webhook.enabled=false \
           --timeout 10m \
           --wait
 
