@@ -12,8 +12,11 @@ DB_NAME="${db_name}"
 DB_USERNAME="${db_username}"
 DB_PASSWORD="${db_password}"
 INSTANCE_TYPE="${instance_type}"
-EIP_ALLOCATION_ID="${eip_allocation_id}"
-PROJECT_NAME="OficinaPro-KaykeBauer" # Nome do repositório para clonar
+# EIP_ALLOCATION_ID não é mais necessário aqui pois o Terraform associa
+# PROJECT_NAME="OficinaPro-KaykeBauer" # Removido se não for usado
+
+# IP Público fixo injetado pelo Terraform (EIP)
+PUBLIC_IP="${public_ip}"
 
 # Atualizar e instalar dependências essenciais
 apt-get update -y
@@ -25,10 +28,8 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docke
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io
 
-# Obter IP Público para o TLS SAN
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-
 # Instalar K3s (versão otimizada) com TLS SAN para permitir acesso externo
+# Usamos o IP injetado pelo Terraform para garantir o certificado correto
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--docker --disable=traefik --disable=servicelb --tls-san $PUBLIC_IP" sh -
 
 # Aguardar o K3s ficar pronto
@@ -57,9 +58,6 @@ chmod 700 get_helm.sh
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
 unzip awscliv2.zip
 ./aws/install
-
-# Associar o Elastic IP (garantir que a instância tenha IP fixo)
-aws ec2 associate-address --instance-id $(curl -s http://169.254.169.254/latest/meta-data/instance-id) --allocation-id $EIP_ALLOCATION_ID --region $AWS_REGION
 
 # Clonar o repositório da aplicação
 # Usando variáveis do shell para evitar conflito com o Terraform

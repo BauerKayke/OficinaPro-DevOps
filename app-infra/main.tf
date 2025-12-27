@@ -58,13 +58,13 @@ data "aws_ami" "ubuntu" {
 
 # --- RECURSOS DA APLICAÇÃO ---
 
-# Security Group para K3s (Renomeado para v3 para forçar recriação limpa)
+# Security Group para K3s (Renomeado para v4 para garantir estado limpo)
 resource "aws_security_group" "k3s_sg" {
-  name        = "${var.project_name}-k3s-sg-v3"
+  name        = "${var.project_name}-k3s-sg-v4"
   description = "Security group para o cluster K3s"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id # VEM DA REDE
 
-  tags = { Name = "${var.project_name}-k3s-sg-v3" }
+  tags = { Name = "${var.project_name}-k3s-sg-v4" }
 
   lifecycle {
     create_before_destroy = true
@@ -135,8 +135,14 @@ resource "aws_security_group_rule" "egress_all" {
 
 # Key Pair
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v5"
+  key_name   = "${var.project_name}-budget-key-v6"
   public_key = var.ssh_public_key
+}
+
+# Elastic IP (Definido antes da instância para ser passado ao User Data)
+resource "aws_eip" "k3s_eip" {
+  domain = "vpc"
+  tags = { Name = "${var.project_name}-k3s-eip" }
 }
 
 # EC2 Instance
@@ -144,7 +150,6 @@ resource "aws_instance" "k3s_node" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
   key_name      = aws_key_pair.budget_key.key_name
-  # Pega a primeira subnet pública da rede
   subnet_id     = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
   vpc_security_group_ids = [aws_security_group.k3s_sg.id]
 
@@ -157,22 +162,16 @@ resource "aws_instance" "k3s_node" {
     github_repo     = var.github_repo,
     github_token    = var.github_token,
     aws_region      = var.aws_region,
-    db_host         = data.terraform_remote_state.database.outputs.db_instance_address, # VEM DO BANCO
+    db_host         = data.terraform_remote_state.database.outputs.db_instance_address,
     db_name         = data.terraform_remote_state.database.outputs.db_instance_name,
     db_username     = data.terraform_remote_state.database.outputs.db_instance_username,
-    db_password     = var.db_password, # Agora passamos a variável local, mais seguro que ler output sensitive se possível
+    db_password     = var.db_password,
     instance_type   = var.instance_type,
-    eip_allocation_id = aws_eip.k3s_eip.id,
+    public_ip       = aws_eip.k3s_eip.public_ip, # IP Injetado diretamente
     scripts_version = var.scripts_version
   }))
 
   tags = { Name = "${var.project_name}-k3s-node" }
-}
-
-# Elastic IP
-resource "aws_eip" "k3s_eip" {
-  domain = "vpc"
-  tags = { Name = "${var.project_name}-k3s-eip" }
 }
 
 resource "aws_eip_association" "eip_assoc" {
@@ -182,43 +181,59 @@ resource "aws_eip_association" "eip_assoc" {
 
 provider "kubernetes" {
   config_path    = "~/.kube/config"
-  insecure       = true # Necessário pois o IP no cert do K3s pode não bater com o IP público
+  insecure       = true
 }
 
 provider "helm" {
   kubernetes {
     config_path = "~/.kube/config"
-    insecure    = true # Necessário pois o IP no cert do K3s pode não bater com o IP público
+    insecure    = true
   }
 }
 
 resource "null_resource" "get_kubeconfig" {
-  depends_on = [aws_instance.k3s_node]
+  depends_on = [aws_instance.k3s_node, aws_eip_association.eip_assoc]
 
   provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"] # Força o uso do bash para suportar {1..50}
+    interpreter = ["/bin/bash", "-c"]
     command = <<EOT
       mkdir -p ~/.kube
       echo "Aguardando user_data finalizar e criar kubeconfig..."
-      for i in {1..50}; do
+      
+      # 1. Copiar o arquivo kubeconfig
+      for i in {1..60}; do
         if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config; then
           echo "Kubeconfig copiado com sucesso na tentativa $i!"
-          
           # Substituir 127.0.0.1 pelo IP Público da instância
           sed -i 's/127.0.0.1/${aws_eip.k3s_eip.public_ip}/g' ~/.kube/config
-          
-          exit 0
+          break
         fi
-        echo "Tentativa $i falhou. Aguardando 10s..."
+        echo "Tentativa SCP $i falhou. Aguardando 10s..."
         sleep 10
       done
-      echo "timeout: Falha ao copiar kubeconfig após 50 tentativas (500s)."
+
+      if [ ! -f ~/.kube/config ]; then
+        echo "timeout: Falha ao copiar kubeconfig após 60 tentativas."
+        exit 1
+      fi
+
+      # 2. Verificar conectividade com a porta da API (6443) antes de prosseguir
+      echo "Verificando conectividade com K3s API em ${aws_eip.k3s_eip.public_ip}:6443..."
+      for i in {1..30}; do
+        if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${aws_eip.k3s_eip.public_ip}/6443"; then
+          echo "Porta 6443 acessível!"
+          exit 0
+        fi
+        echo "Porta 6443 inacessível (tentativa $i/30). Aguardando 10s..."
+        sleep 10
+      done
+
+      echo "timeout: Falha ao conectar na porta 6443 do K3s."
       exit 1
     EOT
   }
 
   triggers = {
-    # Forçar execução a cada apply para garantir que o arquivo exista no runner
     always_run = "${timestamp()}"
   }
 }
@@ -233,7 +248,7 @@ resource "helm_release" "newrelic_k8s" {
   create_namespace = true
   version    = "5.0.25"
   timeout    = 600
-  replace    = true  # Forçar substituição se já existir (útil se falhou antes)
+  replace    = true
   force_update = true
 
   set {
