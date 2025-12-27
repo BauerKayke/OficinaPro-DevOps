@@ -5,14 +5,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.11.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.23.0"
-    }
   }
 }
 
@@ -179,18 +171,6 @@ resource "aws_eip_association" "eip_assoc" {
   allocation_id = aws_eip.k3s_eip.id
 }
 
-provider "kubernetes" {
-  config_path    = "~/.kube/config"
-  insecure       = true
-}
-
-provider "helm" {
-  kubernetes {
-    config_path = "~/.kube/config"
-    insecure    = true
-  }
-}
-
 resource "null_resource" "get_kubeconfig" {
   depends_on = [aws_instance.k3s_node, aws_eip_association.eip_assoc]
 
@@ -235,40 +215,5 @@ resource "null_resource" "get_kubeconfig" {
 
   triggers = {
     always_run = "${timestamp()}"
-  }
-}
-
-resource "helm_release" "newrelic_k8s" {
-  depends_on = [null_resource.get_kubeconfig]
-
-  name       = "newrelic-bundle"
-  repository = "https://helm-charts.newrelic.com"
-  chart      = "nri-bundle"
-  namespace  = "newrelic"
-  create_namespace = true
-  version    = "5.0.25"
-  timeout    = 600
-  replace    = true
-  force_update = true
-
-  set {
-    name  = "global.licenseKey"
-    value = var.newrelic_license_key
-  }
-  set {
-    name  = "global.cluster"
-    value = "${var.project_name}-cluster"
-  }
-  set {
-    name  = "newrelic-infrastructure.enabled"
-    value = "true"
-  }
-  set {
-    name  = "kube-state-metrics.enabled"
-    value = "true"
-  }
-  set {
-    name  = "opentelemetry.enabled"
-    value = "true"
   }
 }
