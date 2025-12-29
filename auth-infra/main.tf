@@ -152,40 +152,54 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 }
 
-# --- INTEGRAÇÃO 1: AUTH (LAMBDA) ---
+# --- AUTHORIZER (VALIDADOR DE TOKEN) ---
+
+resource "aws_apigatewayv2_authorizer" "auth_lambda_authorizer" {
+  api_id           = aws_apigatewayv2_api.main_gateway.id
+  authorizer_type  = "REQUEST"
+  authorizer_uri   = aws_lambda_function.auth_function.invoke_arn
+  identity_sources = ["$request.header.Authorization"]
+  name             = "oficinapro-auth-authorizer"
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses = true # Permite retornar booleano ou JSON simples
+}
+
+# --- INTEGRAÇÃO 1: AUTH (ROTA DE LOGIN) ---
 
 resource "aws_apigatewayv2_integration" "auth_lambda_integration" {
   api_id           = aws_apigatewayv2_api.main_gateway.id
   integration_type = "AWS_PROXY"
 
   connection_type    = "INTERNET"
-  description        = "Integração com Lambda Auth"
+  description        = "Integração com Lambda Auth (Login)"
   integration_method = "POST"
   integration_uri    = aws_lambda_function.auth_function.invoke_arn
   payload_format_version = "2.0"
 }
 
-# Rota: /auth/* -> Lambda Auth
+# Rota: /auth/* -> Lambda Auth (SEM AUTHORIZER, pois é login público)
 resource "aws_apigatewayv2_route" "auth_route" {
   api_id    = aws_apigatewayv2_api.main_gateway.id
   route_key = "ANY /auth/{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
 }
 
-# Rota Raiz Auth (opcional, para /auth direto)
-resource "aws_apigatewayv2_route" "auth_root_route" {
-  api_id    = aws_apigatewayv2_api.main_gateway.id
-  route_key = "ANY /auth"
-  target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
-}
-
-# Permissão para o API Gateway invocar a Lambda
+# Permissão para o API Gateway invocar a Lambda (Login)
 resource "aws_lambda_permission" "api_gw_auth" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.auth_function.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.main_gateway.execution_arn}/*/*"
+}
+
+# Permissão para o API Gateway invocar a Lambda (Authorizer)
+resource "aws_lambda_permission" "api_gw_authorizer" {
+  statement_id  = "AllowExecutionFromAPIGatewayAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.auth_function.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main_gateway.execution_arn}/authorizers/${aws_apigatewayv2_authorizer.auth_lambda_authorizer.id}"
 }
 
 # --- INTEGRAÇÃO 2: APLICAÇÃO JAVA (K3s/EC2 HTTP PROXY) ---
@@ -202,19 +216,16 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   description        = "Proxy para o App Java no K3s"
 }
 
-# Rota: /api/* -> App Java
+# Rota: /api/* -> App Java (COM AUTHORIZER)
 resource "aws_apigatewayv2_route" "app_route" {
   api_id    = aws_apigatewayv2_api.main_gateway.id
   route_key = "ANY /api/{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
+  
+  # Aqui ligamos a proteção
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth_lambda_authorizer.id
 }
-
-# --- INTEGRAÇÃO 3: PAGAMENTO (FUTURO) ---
-# Quando o serviço de pagamento existir, adicionaremos uma integração similar aqui
-# resource "aws_apigatewayv2_route" "payment_route" {
-#   route_key = "ANY /pagamento/{proxy+}"
-#   ...
-# }
 
 # --- OUTPUTS ---
 
