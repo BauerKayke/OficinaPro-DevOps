@@ -103,16 +103,16 @@ data "archive_file" "lambda_placeholder" {
   type        = "zip"
   output_path = "${path.module}/placeholder.zip"
   source {
-    content  = "package main; func main() {}"
-    filename = "main.go"
+    content  = "#!/bin/sh\necho 'placeholder'"
+    filename = "bootstrap"
   }
 }
 
 resource "aws_lambda_function" "auth_function" {
   function_name = var.lambda_name
   role          = aws_iam_role.lambda_exec.arn
-  handler       = "main" # Nome do binário Go dentro do zip
-  runtime       = "go1.x" # Ou provided.al2 se usar bootstrap customizado
+  handler       = "bootstrap" # Para provided.al2023, o handler é ignorado mas o binário deve ser 'bootstrap'
+  runtime       = "provided.al2023" # Amazon Linux 2023 (sucessor do go1.x)
   timeout       = 10
   memory_size   = 128
 
