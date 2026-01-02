@@ -28,7 +28,20 @@ apt-get install -y apt-transport-https ca-certificates curl software-properties-
 
 # Instalar K3s (versão otimizada) com TLS SAN para permitir acesso externo
 # Removido --docker para usar containerd (nativo e mais estável)
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --disable=servicelb --tls-san $PUBLIC_IP" sh -
+echo "Baixando instalador K3s..."
+curl -sfL https://get.k3s.io -o install.sh
+chmod +x install.sh
+
+echo "Executando instalador K3s..."
+INSTALL_K3S_EXEC="--disable=traefik --disable=servicelb --tls-san $PUBLIC_IP" ./install.sh
+
+# Verificar se instalou
+if ! systemctl is-active --quiet k3s; then
+    echo "ERRO CRÍTICO: K3s não iniciou!"
+    exit 1
+fi
+
+echo "K3s instalado com sucesso."
 
 # Aguardar o K3s ficar pronto
 sleep 30
