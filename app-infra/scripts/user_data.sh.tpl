@@ -22,15 +22,13 @@ PUBLIC_IP="${public_ip}"
 apt-get update -y
 apt-get install -y apt-transport-https ca-certificates curl software-properties-common git jq unzip
 
-# Instalar Docker usando script oficial (mais robusto)
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
-# Adicionar usuário ao grupo docker (embora K3s rode como root/service)
-usermod -aG docker ubuntu
+# Instalar dependências essenciais (removendo Docker que está quebrando o script)
+apt-get update -y
+apt-get install -y apt-transport-https ca-certificates curl software-properties-common git jq unzip
 
 # Instalar K3s (versão otimizada) com TLS SAN para permitir acesso externo
-# Usamos o IP injetado pelo Terraform para garantir o certificado correto
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--docker --disable=traefik --disable=servicelb --tls-san $PUBLIC_IP" sh -
+# Removido --docker para usar containerd (nativo e mais estável)
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --disable=servicelb --tls-san $PUBLIC_IP" sh -
 
 # Aguardar o K3s ficar pronto
 sleep 30
