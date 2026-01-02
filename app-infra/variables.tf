@@ -13,9 +13,9 @@ variable "project_name" {
 }
 
 variable "instance_type" {
-  description = "Tipo da instância EC2 (otimizado para Free Tier)"
+  description = "Tipo da instância EC2 (t3.small para suportar K3s + Java)"
   type        = string
-  default     = "t3.micro"
+  default     = "t3.small"
 }
 
 variable "spot_max_price" {
