@@ -35,7 +35,7 @@ data "terraform_remote_state" "database" {
   backend = "s3"
   config = {
     bucket = "fiap-oficinapro-kb-tfstate"
-    key    = "oficinapro/database-infra/terraform.tfstate"
+    key    = "oficinapro/database/terraform.tfstate"
     region = var.aws_region
   }
 }
