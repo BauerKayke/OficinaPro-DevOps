@@ -31,6 +31,15 @@ data "aws_subnets" "lambda_subnets" {
 }
 
 # Ler estado do DATABASE (RDS)
+data "terraform_remote_state" "database" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-kb-tfstate"
+    key    = "oficinapro/database-infra/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
 data "aws_security_group" "rds_sg" {
   tags = {
     Name = "${var.project_name}-rds-sg"
@@ -129,7 +138,7 @@ resource "aws_lambda_function" "auth_function" {
 
   environment {
     variables = {
-      DB_HOST     = var.db_host
+      DB_HOST     = data.terraform_remote_state.database.outputs.db_instance_address
       DB_USER     = var.db_user
       DB_PASSWORD = var.db_password
       DB_NAME     = var.db_name
