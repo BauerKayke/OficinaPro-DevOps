@@ -209,8 +209,8 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
   
-  # Pega o IP Público da EC2 do output do módulo app-infra
-  integration_uri    = "http://${data.terraform_remote_state.app_infra.outputs.k3s_host_public_ip}:80/{proxy}"
+  # Pega o DNS do ALB do output do módulo app-infra
+  integration_uri    = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
   
   connection_type    = "INTERNET"
   description        = "Proxy para o App Java no K3s"
