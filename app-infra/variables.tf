@@ -52,13 +52,7 @@ variable "db_password" {
   sensitive   = true
 }
 
-# --- Variáveis New Relic & SSH ---
-
-variable "newrelic_license_key" {
-  description = "Chave de licença de ingestão do New Relic"
-  type        = string
-  sensitive   = true
-}
+# --- Variáveis SSH ---
 
 variable "ssh_private_key_path" {
   description = "Caminho para a chave SSH privada para acessar a instância EC2 (para copiar kubeconfig)"
