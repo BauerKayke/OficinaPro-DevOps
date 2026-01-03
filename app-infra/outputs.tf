@@ -7,3 +7,8 @@ output "k3s_host_id" {
   description = "ID da instância EC2"
   value       = aws_instance.k3s_node.id
 }
+
+output "alb_dns_name" {
+  description = "DNS do Application Load Balancer"
+  value       = aws_lb.app_alb.dns_name
+}

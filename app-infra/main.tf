@@ -48,52 +48,116 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# --- RECURSOS DA APLICAÇÃO ---
+# --- APPLICATION LOAD BALANCER (ALB) ---
 
-# Security Group para K3s (Renomeado para v4 para garantir estado limpo)
+# Security Group do ALB (Permite HTTP/HTTPS de qualquer lugar)
+resource "aws_security_group" "alb_sg" {
+  name        = "${var.project_name}-alb-sg"
+  description = "Security group para o ALB Publico"
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP Publico"
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS Publico"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project_name}-alb-sg" }
+}
+
+# ALB Público
+resource "aws_lb" "app_alb" {
+  name               = "${var.project_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = data.terraform_remote_state.network.outputs.public_subnet_ids
+
+  enable_deletion_protection = false
+
+  tags = { Name = "${var.project_name}-alb" }
+}
+
+# Target Group (Aponta para EC2 na porta 80 - Nginx HostNetwork)
+resource "aws_lb_target_group" "app_tg" {
+  name     = "${var.project_name}-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = data.terraform_remote_state.network.outputs.vpc_id
+
+  health_check {
+    path                = "/actuator/health" # Health Check da aplicação (via Nginx)
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    matcher             = "200"
+  }
+}
+
+# Listener HTTP (Porta 80)
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.app_alb.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app_tg.arn
+  }
+}
+
+# Associação do EC2 ao Target Group
+resource "aws_lb_target_group_attachment" "ec2_attach" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.k3s_node.id
+  port             = 80
+}
+
+# --- RECURSOS DA INSTÂNCIA EC2 (K3s) ---
+
+# Security Group para K3s (Restrito)
 resource "aws_security_group" "k3s_sg" {
-  name        = "${var.project_name}-k3s-sg-v4"
+  name        = "${var.project_name}-k3s-sg-v5" # v5 para forçar recriação
   description = "Security group para o cluster K3s"
-  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id # VEM DA REDE
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
-  tags = { Name = "${var.project_name}-k3s-sg-v4" }
+  tags = { Name = "${var.project_name}-k3s-sg-v5" }
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-# Regras de Ingress (Entrada)
+# Regra: SSH liberado (necessário para CI/CD via SSH Action)
 resource "aws_security_group_rule" "ingress_ssh" {
   type              = "ingress"
   from_port         = 22
   to_port           = 22
   protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
+  cidr_blocks       = ["0.0.0.0/0"] # Idealmente restringir ao GitHub Actions IP
   security_group_id = aws_security_group.k3s_sg.id
-  description       = "SSH"
+  description       = "SSH para CI/CD"
 }
 
-resource "aws_security_group_rule" "ingress_http" {
-  type              = "ingress"
-  from_port         = 80
-  to_port           = 80
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.k3s_sg.id
-  description       = "HTTP"
-}
-
-resource "aws_security_group_rule" "ingress_https" {
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.k3s_sg.id
-  description       = "HTTPS"
-}
-
+# Regra: API Server (necessário para kubectl remoto se usado)
 resource "aws_security_group_rule" "ingress_k3s_api" {
   type              = "ingress"
   from_port         = 6443
@@ -104,6 +168,29 @@ resource "aws_security_group_rule" "ingress_k3s_api" {
   description       = "K3s API server externo"
 }
 
+# Regra: HTTP (80) APENAS do ALB (Segurança!)
+resource "aws_security_group_rule" "ingress_http_from_alb" {
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_sg.id # Apenas tráfego do ALB
+  security_group_id        = aws_security_group.k3s_sg.id
+  description              = "HTTP apenas via ALB"
+}
+
+# Regra: HTTPS (443) APENAS do ALB
+resource "aws_security_group_rule" "ingress_https_from_alb" {
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_sg.id
+  security_group_id        = aws_security_group.k3s_sg.id
+  description              = "HTTPS apenas via ALB"
+}
+
+# Regra: Interna (Node-to-Node)
 resource "aws_security_group_rule" "ingress_k3s_internal" {
   type              = "ingress"
   from_port         = 0
@@ -114,7 +201,7 @@ resource "aws_security_group_rule" "ingress_k3s_internal" {
   description       = "Comunicacao interna entre nodes/pods"
 }
 
-# Regras de Egress (Saída)
+# Regra: Egress (Tudo liberado)
 resource "aws_security_group_rule" "egress_all" {
   type              = "egress"
   from_port         = 0
@@ -127,17 +214,17 @@ resource "aws_security_group_rule" "egress_all" {
 
 # Key Pair
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v9"
+  key_name   = "${var.project_name}-budget-key-v10" # v10
   public_key = var.ssh_public_key
 }
 
-# Elastic IP (Definido antes da instância para ser passado ao User Data)
+# Elastic IP (Necessário para manter IP fixo para SSH e DNS se não usarmos ALB, mas aqui mantemos para SSH)
 resource "aws_eip" "k3s_eip" {
   domain = "vpc"
   tags = { Name = "${var.project_name}-k3s-eip" }
 }
 
-# EC2 Instance
+# EC2 Instance (Subnet Pública para permitir SSH direto)
 resource "aws_instance" "k3s_node" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
