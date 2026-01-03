@@ -200,6 +200,13 @@ resource "aws_apigatewayv2_route" "auth_route_root" {
   target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
 }
 
+# Rota: /health -> Lambda Auth (Health Check)
+resource "aws_apigatewayv2_route" "health_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "GET /health"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
+}
+
 # Permissão para o API Gateway invocar a Lambda (Login)
 resource "aws_lambda_permission" "api_gw_auth" {
   statement_id  = "AllowExecutionFromAPIGateway"
