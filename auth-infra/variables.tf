@@ -25,11 +25,6 @@ variable "lambda_zip_path" {
 }
 
 # Variáveis de Ambiente para a Lambda
-variable "db_host" {
-  description = "Host do banco de dados (será injetado via secret ou data source)"
-  type        = string
-  default     = ""
-}
 
 variable "db_user" {
   description = "Usuário do banco de dados"

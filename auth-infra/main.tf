@@ -11,32 +11,48 @@ provider "aws" {
   region = var.aws_region
 }
 
-# --- DATA SOURCES (Integração com a Rede Existente) ---
+# --- DATA SOURCES ---
 
+# Ler estado da REDE
 data "aws_vpc" "existing_vpc" {
   tags = {
     Name = "${var.project_name}-budget-vpc"
   }
 }
 
-# Buscando subnets privadas para a Lambda (segurança)
-# Assumindo que o app-infra cria subnets privadas ou usaremos as públicas se for uma VPC simples
-# Para este setup Free Tier, vamos usar as subnets que temos disponíveis.
 data "aws_subnets" "lambda_subnets" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.existing_vpc.id]
   }
-  # Ajuste o filtro de tag conforme o que foi criado no app-infra
-  # No app-infra criamos "budget-public-subnet". A Lambda pode rodar lá se tiver acesso ao RDS.
   tags = {
     Name = "${var.project_name}-budget-public-subnet*" 
+  }
+}
+
+# Ler estado do DATABASE (RDS)
+data "terraform_remote_state" "database" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-kb-tfstate"
+    key    = "oficinapro/database/terraform.tfstate"
+    region = var.aws_region
   }
 }
 
 data "aws_security_group" "rds_sg" {
   tags = {
     Name = "${var.project_name}-rds-sg"
+  }
+}
+
+# Ler estado do APP INFRA (EC2/K3s) para pegar o IP Público
+data "terraform_remote_state" "app_infra" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-kb-tfstate"
+    key    = "oficinapro/app-infra/terraform.tfstate"
+    region = var.aws_region
   }
 }
 
@@ -57,13 +73,11 @@ resource "aws_iam_role" "lambda_exec" {
   })
 }
 
-# Permissão básica para logs
 resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Permissão para rodar dentro da VPC (criar interfaces de rede)
 resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
@@ -76,7 +90,6 @@ resource "aws_security_group" "lambda_sg" {
   description = "Security Group para a Lambda de Auth"
   vpc_id      = data.aws_vpc.existing_vpc.id
 
-  # Saída liberada (para acessar RDS e Internet)
   egress {
     from_port   = 0
     to_port     = 0
@@ -85,7 +98,6 @@ resource "aws_security_group" "lambda_sg" {
   }
 }
 
-# Atualizar SG do RDS para permitir acesso da Lambda
 resource "aws_security_group_rule" "rds_allow_lambda" {
   type                     = "ingress"
   from_port                = 5432
@@ -96,27 +108,26 @@ resource "aws_security_group_rule" "rds_allow_lambda" {
   description              = "Permitir acesso da Lambda Auth"
 }
 
-# --- FUNÇÃO LAMBDA ---
+# --- FUNÇÃO LAMBDA (AUTH) ---
 
-# Arquivo placeholder se não existir (para o plan inicial funcionar)
+# Arquivo placeholder se não existir
 data "archive_file" "lambda_placeholder" {
   type        = "zip"
   output_path = "${path.module}/placeholder.zip"
   source {
-    content  = "package main; func main() {}"
-    filename = "main.go"
+    content  = "#!/bin/sh\necho 'placeholder'"
+    filename = "bootstrap"
   }
 }
 
 resource "aws_lambda_function" "auth_function" {
   function_name = var.lambda_name
   role          = aws_iam_role.lambda_exec.arn
-  handler       = "main" # Nome do binário Go dentro do zip
-  runtime       = "go1.x" # Ou provided.al2 se usar bootstrap customizado
+  handler       = "bootstrap"
+  runtime       = "provided.al2023"
   timeout       = 10
   memory_size   = 128
 
-  # Usa o arquivo real se existir, senão usa o placeholder
   filename         = fileexists(var.lambda_zip_path) ? var.lambda_zip_path : data.archive_file.lambda_placeholder.output_path
   source_code_hash = fileexists(var.lambda_zip_path) ? filebase64sha256(var.lambda_zip_path) : data.archive_file.lambda_placeholder.output_base64sha256
 
@@ -127,59 +138,130 @@ resource "aws_lambda_function" "auth_function" {
 
   environment {
     variables = {
-      DB_HOST     = var.db_host
+      DB_HOST     = data.terraform_remote_state.database.outputs.db_instance_address
       DB_USER     = var.db_user
       DB_PASSWORD = var.db_password
       DB_NAME     = var.db_name
+      DB_SSL_MODE = "require"
       JWT_SECRET  = var.jwt_secret
     }
   }
 }
 
-# --- API GATEWAY (HTTP API) ---
+# --- API GATEWAY (CENTRALIZADOR) ---
 
-resource "aws_apigatewayv2_api" "auth_api" {
-  name          = "oficinapro-auth-api"
+resource "aws_apigatewayv2_api" "main_gateway" {
+  name          = "oficinapro-api-gateway"
   protocol_type = "HTTP"
+  description   = "API Gateway Principal (Auth, App, Pagamentos)"
 }
 
 resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.auth_api.id
+  api_id      = aws_apigatewayv2_api.main_gateway.id
   name        = "$default"
   auto_deploy = true
 }
 
-resource "aws_apigatewayv2_integration" "lambda_integration" {
-  api_id           = aws_apigatewayv2_api.auth_api.id
+# --- AUTHORIZER (VALIDADOR DE TOKEN) ---
+
+resource "aws_apigatewayv2_authorizer" "auth_lambda_authorizer" {
+  api_id           = aws_apigatewayv2_api.main_gateway.id
+  authorizer_type  = "REQUEST"
+  authorizer_uri   = aws_lambda_function.auth_function.invoke_arn
+  identity_sources = ["$request.header.Authorization"]
+  name             = "oficinapro-auth-authorizer"
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses = true # Permite retornar booleano ou JSON simples
+}
+
+# --- INTEGRAÇÃO 1: AUTH (ROTA DE LOGIN) ---
+
+resource "aws_apigatewayv2_integration" "auth_lambda_integration" {
+  api_id           = aws_apigatewayv2_api.main_gateway.id
   integration_type = "AWS_PROXY"
 
-  connection_type      = "INTERNET"
-  description          = "Integração com Lambda Auth"
-  integration_method   = "POST"
-  integration_uri      = aws_lambda_function.auth_function.invoke_arn
+  connection_type    = "INTERNET"
+  description        = "Integração com Lambda Auth (Login)"
+  integration_method = "POST"
+  integration_uri    = aws_lambda_function.auth_function.invoke_arn
   payload_format_version = "2.0"
 }
 
-# Rota padrão: envia tudo para a Lambda
-resource "aws_apigatewayv2_route" "default_route" {
-  api_id    = aws_apigatewayv2_api.auth_api.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
+# Rota: /auth/* -> Lambda Auth (SEM AUTHORIZER, pois é login público)
+resource "aws_apigatewayv2_route" "auth_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "ANY /auth/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
 }
 
-# Permissão para o API Gateway invocar a Lambda
-resource "aws_lambda_permission" "api_gw" {
+# Rota exata para /auth (Login)
+resource "aws_apigatewayv2_route" "auth_route_root" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "POST /auth"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
+}
+
+# Rota: /health -> Lambda Auth (Health Check)
+resource "aws_apigatewayv2_route" "health_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "GET /health"
+  target    = "integrations/${aws_apigatewayv2_integration.auth_lambda_integration.id}"
+}
+
+# Permissão para o API Gateway invocar a Lambda (Login)
+resource "aws_lambda_permission" "api_gw_auth" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.auth_function.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.auth_api.execution_arn}/*/*"
+  source_arn    = "${aws_apigatewayv2_api.main_gateway.execution_arn}/*/*"
+}
+
+# Permissão para o API Gateway invocar a Lambda (Authorizer)
+resource "aws_lambda_permission" "api_gw_authorizer" {
+  statement_id  = "AllowExecutionFromAPIGatewayAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.auth_function.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main_gateway.execution_arn}/authorizers/${aws_apigatewayv2_authorizer.auth_lambda_authorizer.id}"
+}
+
+# --- INTEGRAÇÃO 2: APLICAÇÃO JAVA (K3s/EC2 HTTP PROXY) ---
+
+resource "aws_apigatewayv2_integration" "app_http_proxy" {
+  api_id             = aws_apigatewayv2_api.main_gateway.id
+  integration_type   = "HTTP_PROXY"
+  integration_method = "ANY"
+  
+  # Pega o DNS do ALB do output do módulo app-infra
+  integration_uri    = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
+  
+  request_parameters = {
+    "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
+  }
+  
+  connection_type    = "INTERNET"
+  description        = "Proxy para o App Java no K3s"
+}
+
+# Rota: /api/* -> App Java (COM AUTHORIZER)
+resource "aws_apigatewayv2_route" "app_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "ANY /api/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
+  
+  # Aqui ligamos a proteção
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth_lambda_authorizer.id
 }
 
 # --- OUTPUTS ---
 
 output "api_endpoint" {
-  description = "URL do API Gateway"
-  value       = aws_apigatewayv2_api.auth_api.api_endpoint
+  description = "URL do API Gateway Principal"
+  value       = aws_apigatewayv2_api.main_gateway.api_endpoint
 }
 
+output "auth_lambda_arn" {
+  value = aws_lambda_function.auth_function.arn
+}
