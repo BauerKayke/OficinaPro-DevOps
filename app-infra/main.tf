@@ -214,7 +214,7 @@ resource "aws_security_group_rule" "egress_all" {
 
 # Key Pair
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v10" # v10
+  key_name   = "${var.project_name}-budget-key-v11" # v11
   public_key = var.ssh_public_key
 }
 
