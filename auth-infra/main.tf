@@ -236,6 +236,10 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   # Pega o DNS do ALB do output do módulo app-infra
   integration_uri    = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
   
+  request_parameters = {
+    "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
+  }
+  
   connection_type    = "INTERNET"
   description        = "Proxy para o App Java no K3s"
 }
