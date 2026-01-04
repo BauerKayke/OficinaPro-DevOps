@@ -142,6 +142,7 @@ resource "aws_lambda_function" "auth_function" {
       DB_USER     = var.db_user
       DB_PASSWORD = var.db_password
       DB_NAME     = var.db_name
+      DB_SSL_MODE = "require"
       JWT_SECRET  = var.jwt_secret
     }
   }
