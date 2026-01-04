@@ -12,3 +12,8 @@ output "alb_dns_name" {
   description = "DNS do Application Load Balancer"
   value       = aws_lb.app_alb.dns_name
 }
+
+output "alb_listener_arn" {
+  description = "ARN do Listener HTTP do ALB (Necessário para VPC Link)"
+  value       = aws_lb_listener.http.arn
+}

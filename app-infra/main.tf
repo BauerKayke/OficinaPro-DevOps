@@ -82,13 +82,13 @@ resource "aws_security_group" "alb_sg" {
   tags = { Name = "${var.project_name}-alb-sg" }
 }
 
-# ALB Público
+# ALB Privado (Internal)
 resource "aws_lb" "app_alb" {
   name               = "${var.project_name}-alb"
-  internal           = false
+  internal           = true # Agora é interno!
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = data.terraform_remote_state.network.outputs.public_subnet_ids
+  subnets            = data.terraform_remote_state.network.outputs.private_subnet_ids # Subnets Privadas
 
   enable_deletion_protection = false
 

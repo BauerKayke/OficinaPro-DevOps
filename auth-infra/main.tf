@@ -226,22 +226,46 @@ resource "aws_lambda_permission" "api_gw_authorizer" {
   source_arn    = "${aws_apigatewayv2_api.main_gateway.execution_arn}/authorizers/${aws_apigatewayv2_authorizer.auth_lambda_authorizer.id}"
 }
 
-# --- INTEGRAÇÃO 2: APLICAÇÃO JAVA (K3s/EC2 HTTP PROXY) ---
+# --- VPC LINK (CONEXÃO SEGURA GATEWAY -> ALB) ---
+
+resource "aws_security_group" "vpc_link_sg" {
+  name        = "oficinapro-vpc-link-sg"
+  description = "SG para o VPC Link do API Gateway"
+  vpc_id      = data.aws_vpc.existing_vpc.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "oficinapro-vpc-link-sg" }
+}
+
+resource "aws_apigatewayv2_vpc_link" "app_vpc_link" {
+  name               = "oficinapro-vpc-link"
+  security_group_ids = [aws_security_group.vpc_link_sg.id]
+  subnet_ids         = data.aws_subnets.lambda_subnets.ids # Usando subnets privadas/publicas disponíveis
+
+  tags = { Name = "oficinapro-vpc-link" }
+}
+
+# --- INTEGRAÇÃO 2: APLICAÇÃO JAVA (VIA VPC LINK) ---
 
 resource "aws_apigatewayv2_integration" "app_http_proxy" {
   api_id             = aws_apigatewayv2_api.main_gateway.id
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
   
-  # Pega o DNS do ALB do output do módulo app-infra
-  integration_uri    = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
+  # Conexão via VPC Link
+  connection_type    = "VPC_LINK"
+  connection_id      = aws_apigatewayv2_vpc_link.app_vpc_link.id
   
-  request_parameters = {
-    "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
-  }
+  # URI aponta para o Listener do ALB
+  integration_uri    = data.terraform_remote_state.app_infra.outputs.alb_listener_arn
   
-  connection_type    = "INTERNET"
-  description        = "Proxy para o App Java no K3s"
+  description        = "Proxy Privado para o App Java (VPC Link)"
 }
 
 # Rota: /api/* -> App Java (COM AUTHORIZER)
