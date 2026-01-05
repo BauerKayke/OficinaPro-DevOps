@@ -26,7 +26,7 @@ data "aws_subnets" "lambda_subnets" {
     values = [data.aws_vpc.existing_vpc.id]
   }
   tags = {
-    Name = "${var.project_name}-budget-public-subnet*" 
+    Name = "${var.project_name}-budget-public-subnet*"
   }
 }
 
@@ -81,6 +81,27 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
 resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+# Política adicional para CloudWatch Logs (necessário para telemetria)
+resource "aws_iam_role_policy" "lambda_cloudwatch_logs" {
+  name = "${var.lambda_name}-cloudwatch-logs-policy"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:*:log-group:/aws/lambda/${var.lambda_name}:*"
+      }
+    ]
+  })
 }
 
 # --- SECURITY GROUP DA LAMBDA ---
@@ -138,12 +159,28 @@ resource "aws_lambda_function" "auth_function" {
 
   environment {
     variables = {
+      # Database Configuration
       DB_HOST     = data.terraform_remote_state.database.outputs.db_instance_address
       DB_USER     = var.db_user
       DB_PASSWORD = var.db_password
       DB_NAME     = var.db_name
+      DB_PORT     = "5432"
       DB_SSL_MODE = "require"
-      JWT_SECRET  = var.jwt_secret
+
+      # JWT Configuration
+      JWT_SECRET = var.jwt_secret
+
+      # Application Configuration
+      ENVIRONMENT = "production"
+      LOG_LEVEL   = "info"
+
+      # OpenTelemetry / New Relic Configuration
+      TELEMETRY_ENABLED         = tostring(var.telemetry_enabled)
+      TELEMETRY_SERVICE_NAME    = var.telemetry_service_name
+      TELEMETRY_SERVICE_VERSION = var.telemetry_service_version
+      NEW_RELIC_LICENSE_KEY     = var.new_relic_license_key
+      NEW_RELIC_OTLP_ENDPOINT   = var.new_relic_otlp_endpoint
+      TELEMETRY_SAMPLE_RATE     = tostring(var.telemetry_sample_rate)
     }
   }
 }
@@ -165,13 +202,13 @@ resource "aws_apigatewayv2_stage" "default" {
 # --- AUTHORIZER (VALIDADOR DE TOKEN) ---
 
 resource "aws_apigatewayv2_authorizer" "auth_lambda_authorizer" {
-  api_id           = aws_apigatewayv2_api.main_gateway.id
-  authorizer_type  = "REQUEST"
-  authorizer_uri   = aws_lambda_function.auth_function.invoke_arn
-  identity_sources = ["$request.header.Authorization"]
-  name             = "oficinapro-auth-authorizer"
+  api_id                            = aws_apigatewayv2_api.main_gateway.id
+  authorizer_type                   = "REQUEST"
+  authorizer_uri                    = aws_lambda_function.auth_function.invoke_arn
+  identity_sources                  = ["$request.header.Authorization"]
+  name                              = "oficinapro-auth-authorizer"
   authorizer_payload_format_version = "2.0"
-  enable_simple_responses = true # Permite retornar booleano ou JSON simples
+  enable_simple_responses           = true # Permite retornar booleano ou JSON simples
 }
 
 # --- INTEGRAÇÃO 1: AUTH (ROTA DE LOGIN) ---
@@ -180,10 +217,10 @@ resource "aws_apigatewayv2_integration" "auth_lambda_integration" {
   api_id           = aws_apigatewayv2_api.main_gateway.id
   integration_type = "AWS_PROXY"
 
-  connection_type    = "INTERNET"
-  description        = "Integração com Lambda Auth (Login)"
-  integration_method = "POST"
-  integration_uri    = aws_lambda_function.auth_function.invoke_arn
+  connection_type        = "INTERNET"
+  description            = "Integração com Lambda Auth (Login)"
+  integration_method     = "POST"
+  integration_uri        = aws_lambda_function.auth_function.invoke_arn
   payload_format_version = "2.0"
 }
 
@@ -232,16 +269,16 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   api_id             = aws_apigatewayv2_api.main_gateway.id
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
-  
+
   # Pega o DNS do ALB do output do módulo app-infra
-  integration_uri    = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
-  
+  integration_uri = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
+
   request_parameters = {
     "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
   }
-  
-  connection_type    = "INTERNET"
-  description        = "Proxy para o App Java no K3s"
+
+  connection_type = "INTERNET"
+  description     = "Proxy para o App Java no K3s"
 }
 
 # Rota: /api/* -> App Java (COM AUTHORIZER)
@@ -249,7 +286,7 @@ resource "aws_apigatewayv2_route" "app_route" {
   api_id    = aws_apigatewayv2_api.main_gateway.id
   route_key = "ANY /api/{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
-  
+
   # Aqui ligamos a proteção
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth_lambda_authorizer.id

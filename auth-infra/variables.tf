@@ -16,12 +16,12 @@ variable "lambda_name" {
   default     = "oficinapro-auth-function"
 }
 
-# Caminho para o ZIP da Lambda. 
+# Caminho para o ZIP da Lambda.
 # No pipeline, este arquivo será gerado pelo build do Go.
 variable "lambda_zip_path" {
   description = "Caminho para o arquivo ZIP contendo o binário da Lambda"
   type        = string
-  default     = "function.zip" 
+  default     = "function.zip"
 }
 
 # Variáveis de Ambiente para a Lambda
@@ -48,5 +48,43 @@ variable "jwt_secret" {
   description = "Segredo para assinatura do JWT"
   type        = string
   sensitive   = true
+}
+
+# --- TELEMETRY / OBSERVABILITY (OpenTelemetry + New Relic) ---
+
+variable "telemetry_enabled" {
+  description = "Habilita OpenTelemetry"
+  type        = bool
+  default     = true
+}
+
+variable "telemetry_service_name" {
+  description = "Nome do serviço no OpenTelemetry"
+  type        = string
+  default     = "oficinapro-auth"
+}
+
+variable "telemetry_service_version" {
+  description = "Versão do serviço"
+  type        = string
+  default     = "1.0.0"
+}
+
+variable "new_relic_license_key" {
+  description = "New Relic License Key para envio de telemetria"
+  type        = string
+  sensitive   = true
+}
+
+variable "new_relic_otlp_endpoint" {
+  description = "Endpoint OTLP do New Relic"
+  type        = string
+  default     = "otlp.nr-data.net:4318"
+}
+
+variable "telemetry_sample_rate" {
+  description = "Taxa de amostragem de telemetria (0.0 a 1.0)"
+  type        = number
+  default     = 1.0
 }
 
