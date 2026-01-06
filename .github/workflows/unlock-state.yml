@@ -21,6 +21,7 @@ jobs:
       # Necessário pois o backend pode precisar de vars para inicializar, mesmo que não usadas no unlock
       TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
       TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+      TF_VAR_new_relic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
 
     steps:
     - name: 'Checkout'
