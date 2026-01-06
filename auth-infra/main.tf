@@ -25,8 +25,10 @@ data "aws_subnets" "lambda_subnets" {
     name   = "vpc-id"
     values = [data.aws_vpc.existing_vpc.id]
   }
+  # IMPORTANTE: Lambda DEVE estar em subnets PRIVADAS para acessar internet via NAT Gateway
+  # Subnets públicas não funcionam porque Lambda não recebe IP público automaticamente
   tags = {
-    Name = "${var.project_name}-budget-public-subnet*"
+    Name = "${var.project_name}-budget-private-subnet*"
   }
 }
 
