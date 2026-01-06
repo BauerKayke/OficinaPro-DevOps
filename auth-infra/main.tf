@@ -154,36 +154,51 @@ resource "aws_lambda_function" "auth_function" {
   filename         = fileexists(var.lambda_zip_path) ? var.lambda_zip_path : data.archive_file.lambda_placeholder.output_path
   source_code_hash = fileexists(var.lambda_zip_path) ? filebase64sha256(var.lambda_zip_path) : data.archive_file.lambda_placeholder.output_base64sha256
 
+  # New Relic Lambda Extension para captura de logs
+  # Layer ARN: https://layers.newrelic-external.com/
+  layers = var.newrelic_extension_enabled ? [
+    "arn:aws:lambda:${var.aws_region}:451483290750:layer:NewRelicLambdaExtension:37"
+  ] : []
+
   vpc_config {
     subnet_ids         = data.aws_subnets.lambda_subnets.ids
     security_group_ids = [aws_security_group.lambda_sg.id]
   }
 
   environment {
-    variables = {
-      # Database Configuration
-      DB_HOST     = data.terraform_remote_state.database.outputs.db_instance_address
-      DB_USER     = var.db_user
-      DB_PASSWORD = var.db_password
-      DB_NAME     = var.db_name
-      DB_PORT     = "5432"
-      DB_SSL_MODE = "require"
+    variables = merge(
+      {
+        # Database Configuration
+        DB_HOST     = data.terraform_remote_state.database.outputs.db_instance_address
+        DB_USER     = var.db_user
+        DB_PASSWORD = var.db_password
+        DB_NAME     = var.db_name
+        DB_PORT     = "5432"
+        DB_SSL_MODE = "require"
 
-      # JWT Configuration
-      JWT_SECRET = var.jwt_secret
+        # JWT Configuration
+        JWT_SECRET = var.jwt_secret
 
-      # Application Configuration
-      ENVIRONMENT = "production"
-      LOG_LEVEL   = "info"
+        # Application Configuration
+        ENVIRONMENT = "production"
+        LOG_LEVEL   = "info"
 
-      # OpenTelemetry / New Relic Configuration
-      TELEMETRY_ENABLED         = tostring(var.telemetry_enabled)
-      TELEMETRY_SERVICE_NAME    = var.telemetry_service_name
-      TELEMETRY_SERVICE_VERSION = var.telemetry_service_version
-      NEW_RELIC_LICENSE_KEY     = var.new_relic_license_key
-      NEW_RELIC_OTLP_ENDPOINT   = var.new_relic_otlp_endpoint
-      TELEMETRY_SAMPLE_RATE     = tostring(var.telemetry_sample_rate)
-    }
+        # OpenTelemetry / New Relic Configuration
+        TELEMETRY_ENABLED         = tostring(var.telemetry_enabled)
+        TELEMETRY_SERVICE_NAME    = var.telemetry_service_name
+        TELEMETRY_SERVICE_VERSION = var.telemetry_service_version
+        NEW_RELIC_LICENSE_KEY     = var.new_relic_license_key
+        NEW_RELIC_OTLP_ENDPOINT   = var.new_relic_otlp_endpoint
+        TELEMETRY_SAMPLE_RATE     = tostring(var.telemetry_sample_rate)
+      },
+      # Variáveis da New Relic Lambda Extension (apenas se habilitada)
+      var.newrelic_extension_enabled ? {
+        NEW_RELIC_LAMBDA_EXTENSION_ENABLED   = "true"
+        NEW_RELIC_EXTENSION_SEND_FUNCTION_LOGS = "true"
+        NEW_RELIC_ACCOUNT_ID                 = var.newrelic_account_id
+        NEW_RELIC_LAMBDA_HANDLER             = "bootstrap"
+      } : {}
+    )
   }
 }
 
