@@ -1,0 +1,41 @@
+name: 'Terraform Force Unlock'
+
+on:
+  workflow_dispatch:
+    inputs:
+      lock_id:
+        description: 'Lock ID to force unlock'
+        required: true
+      directory:
+        description: 'Directory to run unlock (e.g., auth-infra)'
+        required: true
+        default: 'auth-infra'
+
+jobs:
+  force-unlock:
+    name: 'Force Unlock State'
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # Necessário pois o backend pode precisar de vars para inicializar, mesmo que não usadas no unlock
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+
+    steps:
+    - name: 'Checkout'
+      uses: actions/checkout@v3
+
+    - name: 'Setup Terraform'
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+
+    - name: 'Terraform Init'
+      run: terraform init
+      working-directory: ./${{ github.event.inputs.directory }}
+
+    - name: 'Terraform Force Unlock'
+      run: terraform force-unlock -force ${{ github.event.inputs.lock_id }}
+      working-directory: ./${{ github.event.inputs.directory }}
+
