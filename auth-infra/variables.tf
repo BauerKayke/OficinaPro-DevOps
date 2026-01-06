@@ -88,3 +88,17 @@ variable "telemetry_sample_rate" {
   default     = 1.0
 }
 
+# --- NEW RELIC LAMBDA EXTENSION (Captura de Logs) ---
+
+variable "newrelic_extension_enabled" {
+  description = "Habilita New Relic Lambda Extension para captura de logs"
+  type        = bool
+  default     = true
+}
+
+variable "newrelic_account_id" {
+  description = "New Relic Account ID (encontre em User Menu > API Keys)"
+  type        = string
+  default     = ""
+}
+
