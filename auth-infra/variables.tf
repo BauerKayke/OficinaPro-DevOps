@@ -77,9 +77,9 @@ variable "new_relic_license_key" {
 }
 
 variable "new_relic_otlp_endpoint" {
-  description = "Endpoint OTLP do New Relic"
+  description = "Endpoint OTLP do New Relic (porta 443 HTTPS)"
   type        = string
-  default     = "otlp.nr-data.net:4318"
+  default     = "otlp.nr-data.net"  # Porta 443 implícita (HTTPS) - mesmo do Java
 }
 
 variable "telemetry_sample_rate" {
