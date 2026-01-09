@@ -297,8 +297,9 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
 
-  # Pega o DNS do ALB do output do módulo app-infra
-  integration_uri = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
+  # Pega o ARN do Listener do ALB do output do módulo app-infra
+  # Necessário para integração via VPC Link
+  integration_uri = data.terraform_remote_state.app_infra.outputs.alb_listener_arn
 
   request_parameters = {
     "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
@@ -309,7 +310,33 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   description     = "Proxy para o App Java no K3s"
 }
 
-# Rota: /api/* -> App Java (COM AUTHORIZER)
+# --- ROTAS PÚBLICAS DO APP JAVA (LINKS DE EMAIL) ---
+
+# Aprovar OS (Link do Email) - GET
+resource "aws_apigatewayv2_route" "os_aprovar_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "GET /api/v1/ordens-servico/{id}/aprovar"
+  target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
+  authorization_type = "NONE"
+}
+
+# Rejeitar OS (Link do Email) - GET
+resource "aws_apigatewayv2_route" "os_rejeitar_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "GET /api/v1/ordens-servico/{id}/rejeitar"
+  target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
+  authorization_type = "NONE"
+}
+
+# Registrar Solicitação de Alteração (Link do Email) - GET
+resource "aws_apigatewayv2_route" "os_alterar_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "GET /api/v1/ordens-servico/{id}/registrar-solicitacao-alteracao"
+  target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
+  authorization_type = "NONE"
+}
+
+# Rota Genérica: /api/* -> App Java (COM AUTHORIZER)
 resource "aws_apigatewayv2_route" "app_route" {
   api_id    = aws_apigatewayv2_api.main_gateway.id
   route_key = "ANY /api/{proxy+}"
@@ -318,14 +345,6 @@ resource "aws_apigatewayv2_route" "app_route" {
   # Aqui ligamos a proteção
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth_lambda_authorizer.id
-}
-
-# Rota Pública: Aprovação Externa (sem Authorizer)
-# Permite que o cliente aprove a OS via link no email sem precisar logar
-resource "aws_apigatewayv2_route" "external_approval_route" {
-  api_id    = aws_apigatewayv2_api.main_gateway.id
-  route_key = "GET /api/v1/aprovacao-externa"
-  target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
 }
 
 # --- OUTPUTS ---
