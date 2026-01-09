@@ -282,19 +282,31 @@ resource "aws_lambda_permission" "api_gw_authorizer" {
 
 # --- INTEGRAÇÃO 2: APLICAÇÃO JAVA (K3s/EC2 HTTP PROXY) ---
 
+resource "aws_apigatewayv2_vpc_link" "alb_link" {
+  name               = "oficinapro-alb-link"
+  security_group_ids = [aws_security_group.lambda_sg.id]
+  subnet_ids         = data.aws_subnets.lambda_subnets.ids
+
+  tags = {
+    Name = "${var.project_name}-alb-vpc-link"
+  }
+}
+
 resource "aws_apigatewayv2_integration" "app_http_proxy" {
   api_id             = aws_apigatewayv2_api.main_gateway.id
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
 
-  # Pega o DNS do ALB do output do módulo app-infra
-  integration_uri = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}:80/{proxy}"
+  # Pega o ARN do Listener do ALB do output do módulo app-infra
+  # Necessário para integração via VPC Link
+  integration_uri = data.terraform_remote_state.app_infra.outputs.alb_listener_arn
 
   request_parameters = {
     "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
   }
 
-  connection_type = "INTERNET"
+  connection_type = "VPC_LINK"
+  connection_id   = aws_apigatewayv2_vpc_link.alb_link.id
   description     = "Proxy para o App Java no K3s"
 }
 
