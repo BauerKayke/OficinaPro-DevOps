@@ -103,7 +103,7 @@ resource "aws_lb_target_group" "app_tg" {
   vpc_id   = data.terraform_remote_state.network.outputs.vpc_id
 
   health_check {
-    path                = "/actuator/health" # Health Check da aplicação (via Nginx)
+    path                = "/api/v1/actuator/health" # Health Check da aplicação (via Nginx)
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
