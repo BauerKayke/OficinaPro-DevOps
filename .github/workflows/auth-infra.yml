@@ -11,50 +11,200 @@ on:
         options:
         - apply
         - destroy
+      skip_validation:
+        description: 'Skip post-deploy validation'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TERRAFORM_VERSION: '1.5.0'
+  FUNCTION_NAME: 'oficinapro-auth-function'
+  AWS_REGION: 'us-east-1'
 
 jobs:
   terraform:
     name: 'Terraform Infra Auth'
     runs-on: ubuntu-latest
+
+    outputs:
+      api_endpoint: ${{ steps.outputs.outputs.api_url }}
+      lambda_arn: ${{ steps.outputs.outputs.lambda_arn }}
+
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      # Variáveis de ambiente para o Terraform
       TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
       TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
       TF_VAR_new_relic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
       TF_VAR_newrelic_account_id: ${{ secrets.NEW_RELIC_ACCOUNT_ID }}
 
+    defaults:
+      run:
+        working-directory: ./auth-infra
+
     steps:
     - name: 'Checkout'
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 'Setup Terraform'
-      uses: hashicorp/setup-terraform@v2
+      uses: hashicorp/setup-terraform@v3
       with:
-        terraform_version: 1.5.0
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
 
     - name: 'Terraform Init'
-      run: terraform init
-      working-directory: ./auth-infra
+      run: terraform init -upgrade
 
     - name: 'Terraform Validate'
-      run: terraform validate -no-color
-      working-directory: ./auth-infra
+      run: terraform validate
+
+    - name: 'Terraform Format Check'
+      run: |
+        terraform fmt -check -recursive || {
+          echo "⚠️  Terraform files need formatting"
+          echo "Run: terraform fmt -recursive"
+        }
 
     - name: 'Terraform Plan'
       if: github.event.inputs.action == 'apply'
-      run: terraform plan -no-color
-      working-directory: ./auth-infra
-      continue-on-error: true
+      run: |
+        terraform plan -out=tfplan | tee plan.txt
+        echo ""
+        echo "📊 Plan Summary:"
+        grep -A 100 "Plan:" plan.txt || echo "No changes"
 
     - name: 'Terraform Apply'
       if: github.event.inputs.action == 'apply'
-      run: terraform apply -auto-approve
-      working-directory: ./auth-infra
+      run: |
+        echo "🚀 Applying infrastructure changes..."
+        terraform apply -auto-approve tfplan
+        echo "✅ Infrastructure updated"
+
+    - name: 'Capture Outputs'
+      if: github.event.inputs.action == 'apply'
+      id: outputs
+      run: |
+        API_URL=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
+        LAMBDA_ARN=$(terraform output -raw auth_lambda_arn 2>/dev/null || echo "")
+
+        echo "api_url=${API_URL}" >> $GITHUB_OUTPUT
+        echo "lambda_arn=${LAMBDA_ARN}" >> $GITHUB_OUTPUT
+
+        echo ""
+        echo "📊 Infrastructure Outputs:"
+        echo "  API Endpoint: ${API_URL}"
+        echo "  Lambda ARN: ${LAMBDA_ARN}"
 
     - name: 'Terraform Destroy'
       if: github.event.inputs.action == 'destroy'
-      run: terraform destroy -auto-approve
-      working-directory: ./auth-infra
+      run: |
+        echo "🗑️  Destroying infrastructure..."
+        terraform destroy -auto-approve
+        echo "✅ Infrastructure destroyed"
+
+  validate:
+    name: 'Post-Deploy Validation'
+    runs-on: ubuntu-latest
+    needs: [terraform]
+    if: |
+      github.event.inputs.action == 'apply' &&
+      !inputs.skip_validation &&
+      needs.terraform.result == 'success'
+
+    steps:
+    - name: 'Configure AWS Credentials'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: 'Get Lambda Info'
+      run: |
+        echo "📊 Lambda Configuration:"
+        aws lambda get-function-configuration \
+          --function-name ${{ env.FUNCTION_NAME }} \
+          --output json | jq '{
+            FunctionName,
+            Runtime,
+            LastModified,
+            Version,
+            CodeSize,
+            MemorySize,
+            Timeout,
+            State
+          }'
+
+    - name: 'Test Lambda'
+      run: |
+        echo "🧪 Testing Lambda function..."
+
+        PAYLOAD='{
+          "version": "2.0",
+          "routeKey": "$default",
+          "rawPath": "/auth",
+          "headers": {"content-type": "application/json"},
+          "requestContext": {
+            "http": {"method": "POST", "path": "/auth"}
+          },
+          "body": "{\"email\":\"admin@oficinapro.com\",\"senha\":\"senha123\"}"
+        }'
+
+        RESPONSE=$(aws lambda invoke \
+          --function-name ${{ env.FUNCTION_NAME }} \
+          --cli-binary-format raw-in-base64-out \
+          --payload "$PAYLOAD" \
+          /tmp/response.json \
+          --output json)
+
+        STATUS=$(echo "$RESPONSE" | jq -r '.StatusCode')
+
+        if [ "$STATUS" = "200" ]; then
+          echo "✅ Lambda test passed"
+        else
+          echo "❌ Lambda test failed: $STATUS"
+          exit 1
+        fi
+
+    - name: 'Check Logs'
+      run: |
+        echo "📊 Recent CloudWatch logs:"
+        aws logs tail /aws/lambda/${{ env.FUNCTION_NAME }} \
+          --since 5m \
+          --format short 2>/dev/null | tail -30 || echo "No logs yet"
+
+  summary:
+    name: 'Pipeline Summary'
+    runs-on: ubuntu-latest
+    needs: [terraform, validate]
+    if: always()
+
+    steps:
+    - name: 'Generate Summary'
+      run: |
+        echo "# 🏗️ Auth Infrastructure Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "- **Action**: \`${{ github.event.inputs.action }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Job Status" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Terraform | ${{ needs.terraform.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Validation | ${{ needs.validate.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [[ "${{ needs.terraform.outputs.api_endpoint }}" != "" ]]; then
+          echo "## Deployment Info" >> $GITHUB_STEP_SUMMARY
+          echo "- **API Endpoint**: \`${{ needs.terraform.outputs.api_endpoint }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Lambda ARN**: \`${{ needs.terraform.outputs.lambda_arn }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [[ "${{ needs.terraform.result }}" == "success" && ("${{ needs.validate.result }}" == "success" || "${{ needs.validate.result }}" == "skipped") ]]; then
+          echo "✅ **Infrastructure deployment completed successfully!**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Infrastructure deployment had issues.**" >> $GITHUB_STEP_SUMMARY
+        fi
 
