@@ -85,7 +85,7 @@ resource "aws_security_group" "alb_sg" {
 # ALB Público
 resource "aws_lb" "app_alb" {
   name               = "${var.project_name}-alb"
-  internal           = false
+  internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = data.terraform_remote_state.network.outputs.public_subnet_ids
