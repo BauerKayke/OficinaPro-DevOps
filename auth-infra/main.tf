@@ -336,6 +336,14 @@ resource "aws_apigatewayv2_route" "os_alterar_route" {
   authorization_type = "NONE"
 }
 
+# Rota Pública: Health Check do App Java - GET
+resource "aws_apigatewayv2_route" "app_health_check_route" {
+  api_id    = aws_apigatewayv2_api.main_gateway.id
+  route_key = "GET /api/v1/actuator/health"
+  target    = "integrations/${aws_apigatewayv2_integration.app_http_proxy.id}"
+  authorization_type = "NONE"
+}
+
 # Rota Genérica: /api/* -> App Java (COM AUTHORIZER)
 resource "aws_apigatewayv2_route" "app_route" {
   api_id    = aws_apigatewayv2_api.main_gateway.id
