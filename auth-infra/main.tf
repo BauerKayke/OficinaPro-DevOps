@@ -148,7 +148,7 @@ resource "aws_lambda_function" "auth_function" {
   role          = aws_iam_role.lambda_exec.arn
   handler       = "bootstrap"
   runtime       = "provided.al2023"
-  timeout       = 10
+  timeout       = 30
   memory_size   = 128
 
   filename         = fileexists(var.lambda_zip_path) ? var.lambda_zip_path : data.archive_file.lambda_placeholder.output_path

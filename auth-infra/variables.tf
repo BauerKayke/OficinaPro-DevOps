@@ -93,7 +93,7 @@ variable "telemetry_sample_rate" {
 variable "newrelic_extension_enabled" {
   description = "Habilita New Relic Lambda Extension para captura de logs"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "newrelic_account_id" {
