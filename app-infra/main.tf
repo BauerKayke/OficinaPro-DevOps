@@ -85,7 +85,7 @@ resource "aws_security_group" "alb_sg" {
 # ALB Público
 resource "aws_lb" "app_alb" {
   name               = "${var.project_name}-alb"
-  internal           = true
+  internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = data.terraform_remote_state.network.outputs.public_subnet_ids
@@ -266,7 +266,7 @@ resource "null_resource" "get_kubeconfig" {
     command = <<EOT
       mkdir -p ~/.kube
       echo "Aguardando user_data finalizar e criar kubeconfig..."
-      
+
       # 1. Copiar o arquivo kubeconfig
       for i in {1..60}; do
         if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config; then

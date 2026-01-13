@@ -86,6 +86,7 @@ git clone https://$GITHUB_TOKEN@github.com/$GITHUB_REPO.git /app
 
 # Navegar para o diretório de deploy e aplicar os manifestos Kubernetes
 cd /app/deployment/kubernetes
+chmod +x deploy.sh
 ./deploy.sh
 
 echo "Bootstrap finalizado com sucesso."
