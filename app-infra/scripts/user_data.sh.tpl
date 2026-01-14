@@ -93,6 +93,18 @@ git clone https://$GITHUB_TOKEN@github.com/$GITHUB_REPO.git /app
 # Navegar para o diretório de deploy e aplicar os manifestos Kubernetes
 cd /app/deployment/kubernetes
 chmod +x deploy.sh
-./deploy.sh
+
+# Exportar variáveis de ambiente necessárias para deploy.sh
+export SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD"
+export SPRING_DATA_REDIS_PASSWORD="redis-senha-dummy"  # Placeholder
+export JWT_SECRET="oficinapro-jwt-secret-key-2024"
+export JWT_EXPIRATION="86400000"  # 24 horas
+export SPRING_MAIL_PASSWORD="mail-senha-dummy"  # Placeholder
+export NEW_RELIC_LICENSE_KEY="dummy-license-key"  # Placeholder (será fornecido via CI/CD)
+export DB_HOST="$DB_HOST"
+export API_BASE_URL="https://example.com"  # Placeholder (será atualizado via CI/CD)
+
+# Executar deploy
+./deploy.sh dev apply
 
 echo "Bootstrap finalizado com sucesso."
