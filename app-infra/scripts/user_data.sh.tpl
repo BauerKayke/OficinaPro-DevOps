@@ -80,6 +80,12 @@ curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip
 unzip awscliv2.zip
 ./aws/install
 
+# Instalar Kustomize (necessário para deploy.sh)
+echo "Instalando Kustomize..."
+curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+mv kustomize /usr/local/bin/
+chmod +x /usr/local/bin/kustomize
+
 # Clonar o repositório da aplicação
 # Usando variáveis do shell para evitar conflito com o Terraform
 git clone https://$GITHUB_TOKEN@github.com/$GITHUB_REPO.git /app
