@@ -72,6 +72,23 @@ resource "aws_security_group" "alb_sg" {
     description = "HTTPS Publico"
   }
 
+  # Regras para VPC Link (API Gateway Private Integration)
+  ingress {
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [data.terraform_remote_state.auth_infra.outputs.vpc_link_sg_id]
+    description     = "HTTP do VPC Link (API Gateway)"
+  }
+
+  ingress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [data.terraform_remote_state.auth_infra.outputs.vpc_link_sg_id]
+    description     = "HTTPS do VPC Link (API Gateway)"
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -103,7 +120,7 @@ resource "aws_lb_target_group" "app_tg" {
   vpc_id   = data.terraform_remote_state.network.outputs.vpc_id
 
   health_check {
-    path                = "/actuator/health" # Health Check da aplicação (via Nginx)
+    path                = "/api/v1/actuator/health" # Health Check da aplicação (Spring Boot context-path=/api/v1)
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
