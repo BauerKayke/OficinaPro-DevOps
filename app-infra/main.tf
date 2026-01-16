@@ -63,26 +63,10 @@ data "aws_ami" "ubuntu" {
 # Security Group do ALB (Permite HTTP/HTTPS de qualquer lugar)
 resource "aws_security_group" "alb_sg" {
   name        = "${var.project_name}-alb-sg"
-  description = "Security group para o ALB Publico"
+  description = "Security Group para o ALB interno - apenas VPC Link"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTP Publico"
-  }
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTPS Publico"
-  }
-
-  # Regras para VPC Link (API Gateway Private Integration)
+  # ALB INTERNO - apenas aceita tráfego do VPC Link (API Gateway)
   ingress {
     from_port       = 80
     to_port         = 80
@@ -112,7 +96,7 @@ resource "aws_security_group" "alb_sg" {
 # ALB Público
 resource "aws_lb" "app_alb" {
   name               = "${var.project_name}-alb"
-  internal           = false
+  internal           = true  # Interno para funcionar com VPC Link usando Listener ARN
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = data.terraform_remote_state.network.outputs.public_subnet_ids
