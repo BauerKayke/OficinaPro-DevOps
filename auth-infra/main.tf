@@ -308,9 +308,9 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
 
-  # Para VPC Link, usa ARN do Listener do ALB
-  # VPC Link conecta diretamente ao listener via ARN
-  integration_uri = data.terraform_remote_state.app_infra.outputs.alb_listener_arn
+  # Para ALB público, usa HTTP com DNS do ALB
+  # VPC Link roteia para o DNS do ALB nas subnets públicas
+  integration_uri = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}"
 
   request_parameters = {
     "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"
