@@ -319,6 +319,10 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   connection_type = "VPC_LINK"
   connection_id   = aws_apigatewayv2_vpc_link.alb_link.id
   description     = "Proxy para o App Java no K3s"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # --- ROTAS PÚBLICAS DO APP JAVA (LINKS DE EMAIL) ---
@@ -356,6 +360,10 @@ resource "aws_apigatewayv2_route" "app_route" {
   # Aqui ligamos a proteção
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth_lambda_authorizer.id
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # --- OUTPUTS ---
