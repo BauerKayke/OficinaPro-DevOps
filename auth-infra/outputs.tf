@@ -19,5 +19,5 @@ output "api_gateway_url" {
 # Output da Lambda Function ARN
 output "lambda_function_arn" {
   description = "ARN da função Lambda de autenticação"
-  value       = aws_lambda_function.auth_lambda.arn
+  value       = aws_lambda_function.auth_function.arn
 }

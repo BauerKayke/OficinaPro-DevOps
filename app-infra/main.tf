@@ -34,6 +34,16 @@ data "terraform_remote_state" "database" {
   }
 }
 
+# Lê o estado da AUTH INFRA (VPC Link Security Group)
+data "terraform_remote_state" "auth_infra" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-kb-tfstate"
+    key    = "oficinapro/auth-infra/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
 # Data sources locais
 data "aws_availability_zones" "available" {
   state = "available"
