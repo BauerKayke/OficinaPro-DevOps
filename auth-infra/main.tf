@@ -32,6 +32,17 @@ data "aws_subnets" "lambda_subnets" {
   }
 }
 
+# Subnets públicas para o VPC Link (onde o ALB está)
+data "aws_subnets" "public_subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.existing_vpc.id]
+  }
+  tags = {
+    Name = "${var.project_name}-budget-public-subnet*"
+  }
+}
+
 # Ler estado do DATABASE (RDS)
 data "terraform_remote_state" "database" {
   backend = "s3"
@@ -285,7 +296,7 @@ resource "aws_lambda_permission" "api_gw_authorizer" {
 resource "aws_apigatewayv2_vpc_link" "alb_link" {
   name               = "oficinapro-alb-link"
   security_group_ids = [aws_security_group.lambda_sg.id]
-  subnet_ids         = data.aws_subnets.lambda_subnets.ids
+  subnet_ids         = data.aws_subnets.public_subnets.ids  # Mesmas subnets do ALB
 
   tags = {
     Name = "${var.project_name}-alb-vpc-link"
@@ -297,9 +308,9 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
 
-  # Para HTTP_PROXY com VPC Link, usa http://DNS-DO-ALB (não ARN!)
-  # O VPC Link conecta ao ALB via DNS interno
-  integration_uri = "http://${data.terraform_remote_state.app_infra.outputs.alb_dns_name}"
+  # Para VPC Link, usa ARN do Listener do ALB
+  # VPC Link conecta diretamente ao listener via ARN
+  integration_uri = data.terraform_remote_state.app_infra.outputs.alb_listener_arn
 
   request_parameters = {
     "append:header.X-OficinaPro-Secret" = "OficinaPro-Secure-Gateway-Token-2026"

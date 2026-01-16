@@ -304,35 +304,3 @@ resource "null_resource" "get_kubeconfig" {
     always_run = "${timestamp()}"
   }
 }
-
-# --- OUTPUTS ---
-
-output "alb_dns_name" {
-  description = "DNS name do Application Load Balancer"
-  value       = aws_lb.app_alb.dns_name
-}
-
-output "alb_arn" {
-  description = "ARN do Application Load Balancer"
-  value       = aws_lb.app_alb.arn
-}
-
-output "alb_listener_arn" {
-  description = "ARN do HTTP Listener do ALB (usado pelo API Gateway via VPC Link)"
-  value       = aws_lb_listener.http.arn
-}
-
-output "alb_zone_id" {
-  description = "Zone ID do ALB (para Route53)"
-  value       = aws_lb.app_alb.zone_id
-}
-
-output "ec2_public_ip" {
-  description = "IP público da instância EC2 (K3s node)"
-  value       = aws_eip.k3s_eip.public_ip
-}
-
-output "ec2_instance_id" {
-  description = "ID da instância EC2"
-  value       = aws_instance.k3s_node.id
-}
