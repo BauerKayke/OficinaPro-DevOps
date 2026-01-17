@@ -229,6 +229,44 @@ resource "aws_key_pair" "budget_key" {
   public_key = var.ssh_public_key
 }
 
+# ====================================================================
+# IAM ROLE PARA EC2 - PERMITE SYSTEMS MANAGER (FALLBACK PARA SSH)
+# ====================================================================
+
+# IAM Role para EC2 com permissões de Systems Manager
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "${var.project_name}-ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = { Name = "${var.project_name}-ec2-ssm-role" }
+}
+
+# Attach da política gerenciada do Systems Manager
+resource "aws_iam_role_policy_attachment" "ssm_policy" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Instance Profile para anexar na EC2
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "${var.project_name}-ec2-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
+# ===================================================================="
+
 # Elastic IP (Necessário para manter IP fixo para SSH e DNS se não usarmos ALB, mas aqui mantemos para SSH)
 resource "aws_eip" "k3s_eip" {
   domain = "vpc"
@@ -242,6 +280,7 @@ resource "aws_instance" "k3s_node" {
   key_name      = aws_key_pair.budget_key.key_name
   subnet_id     = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
   vpc_security_group_ids = [aws_security_group.k3s_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name  # IAM Role para SSM
 
   root_block_device {
     volume_size = 30

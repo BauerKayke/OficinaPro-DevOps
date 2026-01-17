@@ -22,9 +22,25 @@ PUBLIC_IP="${public_ip}"
 apt-get update -y
 apt-get install -y apt-transport-https ca-certificates curl software-properties-common git jq unzip
 
-# Instalar dependências essenciais (removendo Docker que está quebrando o script)
-apt-get update -y
-apt-get install -y apt-transport-https ca-certificates curl software-properties-common git jq unzip
+# ====================================================================
+# GARANTIR QUE SSH PERMANECE ACESSÍVEL (CRÍTICO PARA CI/CD)
+# ====================================================================
+echo "Configurando firewall para garantir acesso SSH..."
+
+# Desabilitar ufw se estiver ativo (conflita com K3s)
+systemctl stop ufw || true
+systemctl disable ufw || true
+
+# Garantir que o SSH service está rodando e habilitado
+systemctl enable ssh
+systemctl start ssh
+systemctl status ssh
+
+# Verificar que a porta 22 está escutando
+ss -tlnp | grep :22 || echo "AVISO: SSH não está escutando na porta 22!"
+
+echo "SSH configurado e verificado."
+# ===================================================================="
 
 # Instalar K3s (versão otimizada) com TLS SAN para permitir acesso externo
 # Removido --docker para usar containerd (nativo e mais estável)
@@ -42,6 +58,20 @@ if ! systemctl is-active --quiet k3s; then
 fi
 
 echo "K3s instalado com sucesso."
+
+# ====================================================================
+# VERIFICAR NOVAMENTE QUE SSH AINDA ESTÁ ACESSÍVEL PÓS K3S
+# ====================================================================
+echo "Verificando acesso SSH pós-instalação do K3s..."
+systemctl status ssh
+ss -tlnp | grep :22 || echo "ERRO: SSH não está mais acessível!"
+
+# Se K3s modificou iptables, garantir que SSH continua permitido
+iptables -L INPUT -n | grep "dpt:22" || {
+    echo "Adicionando regra iptables para SSH..."
+    iptables -I INPUT -p tcp --dport 22 -j ACCEPT
+}
+# ===================================================================="
 
 # Aguardar o K3s ficar pronto
 sleep 30
