@@ -253,8 +253,6 @@ resource "aws_key_pair" "budget_key" {
   public_key = var.ssh_public_key
 }
 
-"
-
 # Elastic IP (Necessário para manter IP fixo para SSH e DNS se não usarmos ALB, mas aqui mantemos para SSH)
 resource "aws_eip" "k3s_eip" {
   domain = "vpc"
