@@ -142,6 +142,40 @@ resource "aws_lb_target_group_attachment" "ec2_attach" {
   port             = 80
 }
 
+# --- IAM ROLE E INSTANCE PROFILE PARA EC2 (SSM) ---
+
+# IAM Role para a instância EC2 (permite SSM Session Manager)
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "${var.project_name}-ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+
+  tags = { Name = "${var.project_name}-ec2-ssm-role" }
+}
+
+# Anexar política gerenciada AmazonSSMManagedInstanceCore
+resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Instance Profile (conecta a Role à instância EC2)
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "${var.project_name}-ec2-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+
+  tags = { Name = "${var.project_name}-ec2-profile" }
+}
+
 # --- RECURSOS DA INSTÂNCIA EC2 (K3s) ---
 
 # Security Group para K3s (Restrito)
@@ -275,12 +309,12 @@ resource "aws_eip" "k3s_eip" {
 
 # EC2 Instance (Subnet Pública para permitir SSH direto)
 resource "aws_instance" "k3s_node" {
-  ami           = data.aws_ami.ubuntu.id
-  instance_type = var.instance_type
-  key_name      = aws_key_pair.budget_key.key_name
-  subnet_id     = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
+  ami                  = data.aws_ami.ubuntu.id
+  instance_type        = var.instance_type
+  key_name             = aws_key_pair.budget_key.key_name
+  subnet_id            = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
   vpc_security_group_ids = [aws_security_group.k3s_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name  # IAM Role para SSM
+  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
 
   root_block_device {
     volume_size = 30
