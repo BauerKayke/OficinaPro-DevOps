@@ -36,7 +36,7 @@ data "aws_subnets" "lambda_subnets" {
 data "terraform_remote_state" "database" {
   backend = "s3"
   config = {
-    bucket = "fiap-oficinapro-kb-tfstate"
+    bucket = "fiap-oficinapro-ckm-tfstate"
     key    = "oficinapro/database/terraform.tfstate"
     region = var.aws_region
   }
@@ -52,7 +52,7 @@ data "aws_security_group" "rds_sg" {
 data "terraform_remote_state" "app_infra" {
   backend = "s3"
   config = {
-    bucket = "fiap-oficinapro-kb-tfstate"
+    bucket = "fiap-oficinapro-ckm-tfstate"
     key    = "oficinapro/app-infra/terraform.tfstate"
     region = var.aws_region
   }
