@@ -53,7 +53,7 @@ data "aws_ami" "ubuntu" {
 # Security Group do ALB (Permite HTTP/HTTPS da VPC interna)
 resource "aws_security_group" "alb_sg" {
   name        = "${var.project_name}-alb-sg"
-  description = "Security Group para o ALB interno - aceita tráfego da VPC"
+  description = "Security Group for internal ALB - accepts VPC traffic"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   # ALB INTERNO - aceita tráfego da VPC (para VPC Link do API Gateway)
