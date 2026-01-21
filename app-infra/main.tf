@@ -34,16 +34,6 @@ data "terraform_remote_state" "database" {
   }
 }
 
-# Lê o estado da AUTH INFRA (VPC Link Security Group)
-data "terraform_remote_state" "auth_infra" {
-  backend = "s3"
-  config = {
-    bucket = "fiap-oficinapro-ckm-tfstate"
-    key    = "oficinapro/auth-infra/terraform.tfstate"
-    region = var.aws_region
-  }
-}
-
 # Data sources locais
 data "aws_availability_zones" "available" {
   state = "available"
@@ -60,27 +50,27 @@ data "aws_ami" "ubuntu" {
 
 # --- APPLICATION LOAD BALANCER (ALB) ---
 
-# Security Group do ALB (Permite HTTP/HTTPS de qualquer lugar)
+# Security Group do ALB (Permite HTTP/HTTPS da VPC interna)
 resource "aws_security_group" "alb_sg" {
   name        = "${var.project_name}-alb-sg"
-  description = "Security Group para o ALB interno - apenas VPC Link"
+  description = "Security Group para o ALB interno - aceita tráfego da VPC"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
-  # ALB INTERNO - apenas aceita tráfego do VPC Link (API Gateway)
+  # ALB INTERNO - aceita tráfego da VPC (para VPC Link do API Gateway)
   ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [data.terraform_remote_state.auth_infra.outputs.vpc_link_sg_id]
-    description     = "HTTP do VPC Link (API Gateway)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]  # Tráfego da VPC
+    description = "HTTP da VPC (VPC Link)"
   }
 
   ingress {
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    security_groups = [data.terraform_remote_state.auth_infra.outputs.vpc_link_sg_id]
-    description     = "HTTPS do VPC Link (API Gateway)"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]  # Tráfego da VPC
+    description = "HTTPS da VPC (VPC Link)"
   }
 
   egress {
