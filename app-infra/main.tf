@@ -1,11 +1,4 @@
 terraform {
-  backend "s3" {
-    bucket         = "oficinapro-terraform-state-bucket"
-    key            = "oficinapro/app-infra/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "oficinapro-terraform-locks"
-    encrypt        = true
-  }
   required_providers {
     aws = {
       source  = "hashicorp/aws"
