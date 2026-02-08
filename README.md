@@ -167,7 +167,7 @@ terraform apply
 
 ### 5. App Infrastructure
 
-Provisiona EC2, ALB e configura K3s.
+Provisiona Cluster K3s (Master + Worker), ALB e configura K3s.
 
 ```bash
 cd ../app-infra/
@@ -240,16 +240,21 @@ graph TD
 
 ## 💰 Custos
 
-A infraestrutura foi projetada para **AWS Free Tier**:
+A infraestrutura utiliza uma arquitetura híbrida otimizada para garantir estabilidade e performance:
 
-| Recurso | Free Tier |
-|---------|-----------|
-| EC2 t2.micro | 750 horas/mês |
-| RDS db.t3.micro | 750 horas/mês |
-| Lambda | 1M requests/mês |
-| API Gateway | 1M requests/mês |
-| S3 | 5GB |
-| CloudWatch | 10 métricas customizadas |
+| Recurso | Tipo | Custo Estimado |
+|---------|------|----------------|
+| **EC2 Master** | t3.small | ~$15.18/mês |
+| **EC2 Worker** | t3.medium | ~$30.37/mês |
+| **ALB** | Application LB | ~$21.20/mês |
+| **NAT Gateway** | Managed NAT | ~$35.40/mês |
+| **RDS** | db.t3.micro | ~$15.00/mês |
+| **Lambda** | Serverless | Free Tier (até 1M req) |
+| **API Gateway** | HTTP API | ~$3.50/mês |
+
+**Total Estimado:** ~$127.10/mês
+
+> **Nota:** Embora exceda o Free Tier da AWS, esta arquitetura é necessária para suportar a carga de memória de múltiplos microserviços Java (Spring Boot) sem instabilidade (OOMKills).
 
 ## 👥 Equipe
 
