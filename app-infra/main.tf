@@ -12,14 +12,23 @@ provider "aws" {
 }
 
 # Data Sources
+data "terraform_remote_state" "network" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-ckm-tfstate"
+    key    = "oficinapro/network/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 data "aws_vpc" "main" {
-  id = var.vpc_id
+  id = data.terraform_remote_state.network.outputs.vpc_id
 }
 
 data "aws_subnets" "public" {
   filter {
     name   = "vpc-id"
-    values = [var.vpc_id]
+    values = [data.terraform_remote_state.network.outputs.vpc_id]
   }
   filter {
     name   = "tag:Name"
@@ -30,7 +39,7 @@ data "aws_subnets" "public" {
 data "aws_subnets" "private" {
   filter {
     name   = "vpc-id"
-    values = [var.vpc_id]
+    values = [data.terraform_remote_state.network.outputs.vpc_id]
   }
   filter {
     name   = "tag:Name"
@@ -111,7 +120,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 resource "aws_security_group" "k3s_sg" {
   name        = "oficinapro-k3s-sg-hybrid"
   description = "Security Group para Cluster K3s (Master e Worker)"
-  vpc_id      = var.vpc_id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   # SSH
   ingress {
@@ -226,7 +235,7 @@ resource "aws_eip" "worker_eip" {
 resource "aws_security_group" "alb_sg" {
   name        = "oficinapro-alb-sg-hybrid"
   description = "Security Group para ALB Interno"
-  vpc_id      = var.vpc_id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   ingress {
     from_port   = 80
@@ -270,7 +279,7 @@ resource "aws_lb_target_group" "app_tg" {
   # AJUSTE: K3s com Traefik/Nginx geralmente expõe 80/443 no host se usar HostPort.
   # Se usarmos NodePort, precisamos fixar. Vamos assumir tráfego na porta 80 do host (ingress controller listening on host network)
   protocol    = "HTTP"
-  vpc_id      = var.vpc_id
+  vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
   target_type = "instance"
 
   health_check {

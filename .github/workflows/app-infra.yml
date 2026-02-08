@@ -24,11 +24,8 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
-      TF_VAR_github_token: ${{ secrets.GH_TOKEN }} # Token clássico (PAT)
-      TF_VAR_github_repo: "BauerKayke/OficinaPro-KaykeBauer" # Repositório da aplicação
-      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }} # Senha do RDS
-      TF_VAR_ssh_private_key_path: "./private_key.pem" # Caminho para a chave privada
-      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }} # Chave pública para o Key Pair
+      TF_VAR_key_name: "oficinapro-key" # Nome da chave existente na AWS
+      TF_VAR_ssh_private_key_path: "./private_key.pem"
 
     defaults:
       run:
@@ -66,12 +63,12 @@ jobs:
     - name: Save IP to AWS Parameter Store
       if: ${{ github.event.inputs.action == 'apply' }}
       run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        if [ -n "$EC2_IP" ]; then
+        MASTER_IP=$(terraform output -raw master_public_ip 2>/dev/null || echo "")
+        if [ -n "$MASTER_IP" ]; then
           echo "💾 Salvando IP no AWS Parameter Store..."
           aws ssm put-parameter \
             --name "/oficinapro/k3s/ec2-public-ip" \
-            --value "$EC2_IP" \
+            --value "$MASTER_IP" \
             --type "String" \
             --overwrite \
             --region us-east-1
@@ -82,12 +79,14 @@ jobs:
       if: ${{ github.event.inputs.action == 'apply' }}
       id: ec2_ip
       run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        echo "EC2 Public IP: $EC2_IP"
-        echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
+        MASTER_IP=$(terraform output -raw master_public_ip 2>/dev/null || echo "")
+        WORKER_IP=$(terraform output -raw worker_public_ip 2>/dev/null || echo "")
+        echo "Master IP: $MASTER_IP"
+        echo "Worker IP: $WORKER_IP"
+        echo "ip=$MASTER_IP" >> $GITHUB_OUTPUT
         echo ""
         echo "⚠️  IMPORTANTE: Use este IP nos deployments:"
-        echo "   IP: $EC2_IP"
+        echo "   Master IP: $MASTER_IP"
         echo ""
         echo "💡 Você pode usar o output 'ec2_public_ip' deste job em outros workflows!"
 

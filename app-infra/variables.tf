@@ -10,11 +10,6 @@ variable "project_name" {
   default     = "fiap-oficinapro-kb"
 }
 
-variable "vpc_id" {
-  description = "ID da VPC onde o cluster será criado"
-  type        = string
-}
-
 variable "key_name" {
   description = "Nome do Key Pair existente na AWS para acesso SSH"
   type        = string
