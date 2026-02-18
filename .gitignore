@@ -43,3 +43,11 @@ destroy-*.sh
 *_rsa
 *_ed25519
 !*.pub
+
+# Terraform temporary files
+*.tfvars
+!terraform.tfvars.example
+tfplan*
+terraform-plan-output.txt
+*.backup
+*.worker-cleanup
