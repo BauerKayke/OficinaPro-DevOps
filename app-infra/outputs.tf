@@ -18,21 +18,7 @@ output "k3s_master_id" {
 }
 
 # --- WORKER OUTPUTS ---
-
-output "k3s_worker_public_ip" {
-  description = "IP Público do K3s Worker"
-  value       = aws_eip.k3s_worker_eip.public_ip
-}
-
-output "k3s_worker_private_ip" {
-  description = "IP Privado do K3s Worker"
-  value       = aws_instance.k3s_worker.private_ip
-}
-
-output "k3s_worker_id" {
-  description = "ID da instância EC2 Worker"
-  value       = aws_instance.k3s_worker.id
-}
+# Worker removido para economia de custos
 
 # --- ALB OUTPUTS ---
 
@@ -65,21 +51,11 @@ output "ssh_master_command" {
   value       = "ssh -i ~/.ssh/chave_nova.pem ubuntu@${aws_eip.k3s_master_eip.public_ip}"
 }
 
-output "ssh_worker_command" {
-  description = "Comando SSH para conectar ao Worker"
-  value       = "ssh -i ~/.ssh/chave_nova.pem ubuntu@${aws_eip.k3s_worker_eip.public_ip}"
-}
-
 # --- SSM COMMANDS ---
 
 output "ssm_master_command" {
   description = "Comando para conectar ao Master via Systems Manager"
   value       = "aws ssm start-session --target ${aws_instance.k3s_master.id} --region ${var.aws_region}"
-}
-
-output "ssm_worker_command" {
-  description = "Comando para conectar ao Worker via Systems Manager"
-  value       = "aws ssm start-session --target ${aws_instance.k3s_worker.id} --region ${var.aws_region}"
 }
 
 # --- CLUSTER STATUS COMMANDS ---
@@ -97,6 +73,6 @@ output "check_pods_command" {
 # --- CUSTO ESTIMADO ---
 
 output "monthly_cost_estimate" {
-  description = "Custo mensal estimado da infraestrutura (2x t3.small)"
-  value       = "2x t3.small = $30.37/mês ($15.18 cada)"
+  description = "Custo mensal estimado da infraestrutura (Spot Instance)"
+  value       = "1x m7i-flex.large Spot = ~$26-30/mês (economia 85-90% vs On-Demand)"
 }

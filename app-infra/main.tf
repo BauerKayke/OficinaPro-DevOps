@@ -134,12 +134,6 @@ resource "aws_lb_target_group_attachment" "master_attach" {
   port             = 80
 }
 
-resource "aws_lb_target_group_attachment" "worker_attach" {
-  target_group_arn = aws_lb_target_group.app_tg.arn
-  target_id        = aws_instance.k3s_worker.id
-  port             = 80
-}
-
 # --- IAM ROLE E INSTANCE PROFILE PARA EC2 (SSM + ECR) ---
 
 # IAM Role para a instância EC2
@@ -170,6 +164,33 @@ resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
 resource "aws_iam_role_policy_attachment" "ecr_read_only" {
   role       = aws_iam_role.ec2_ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+# Política inline para SQS (Billing Service)
+resource "aws_iam_role_policy" "sqs_access" {
+  name = "${var.project_name}-sqs-access"
+  role = aws_iam_role.ec2_ssm_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue",
+          "sqs:GetQueueUrl",
+          "sqs:GetQueueAttributes",
+          "sqs:SetQueueAttributes",
+          "sqs:SendMessage",
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:DeleteQueue",
+          "sqs:ListQueues"
+        ]
+        Resource = "arn:aws:sqs:${var.aws_region}:*:oficinapro-*"
+      }
+    ]
+  })
 }
 
 # Instance Profile (conecta a Role às instâncias EC2)
@@ -276,21 +297,33 @@ resource "aws_eip" "k3s_master_eip" {
   tags = { Name = "${var.project_name}-k3s-master-eip" }
 }
 
-# EIP para Worker
-resource "aws_eip" "k3s_worker_eip" {
-  domain = "vpc"
-  tags = { Name = "${var.project_name}-k3s-worker-eip" }
-}
-
-# --- EC2 INSTANCE: K3S MASTER (t3.small - Control Plane Only) ---
+# --- EC2 INSTANCE: K3S MASTER (m7i-flex.large - SPOT INSTANCE) ---
+# 💰 Economia: 85-90% vs On-Demand
+# Spot Price: ~$0.036-0.041/hora (~$26-30/mês)
+# On-Demand Price: ~$0.150/hora (~$108/mês)
 
 resource "aws_instance" "k3s_master" {
   ami                  = data.aws_ami.ubuntu.id
-  instance_type        = "t3.small"  # Leve: apenas control plane + 1 serviço Go
+  instance_type        = "m7i-flex.large"  # Upgraded from t3.small para melhor performance
   key_name             = aws_key_pair.budget_key.key_name
   subnet_id            = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
   vpc_security_group_ids = [aws_security_group.k3s_cluster_sg.id]
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+
+  # 💰 SPOT INSTANCE CONFIGURATION (economia 85-90%)
+  instance_market_options {
+    market_type = "spot"
+    spot_options {
+      # Preço máximo: 53% do on-demand ($0.080 vs $0.150)
+      max_price                      = "0.080"
+      # Tipo: persistent (mantém até terminado manualmente)
+      spot_instance_type             = "persistent"
+      # Comportamento: STOP (para em vez de terminar)
+      # ✅ EBS e estado do K3s persistem
+      # ✅ EIP permanece associado
+      instance_interruption_behavior = "stop"
+    }
+  }
 
   root_block_device {
     volume_size = 30
@@ -310,8 +343,10 @@ resource "aws_instance" "k3s_master" {
   }))
 
   tags = {
-    Name = "${var.project_name}-k3s-master"
+    Name = "${var.project_name}-k3s-master-spot"
     Role = "master"
+    Type = "spot"
+    CostOptimized = "true"
   }
 }
 
@@ -320,96 +355,13 @@ resource "aws_eip_association" "master_eip_assoc" {
   allocation_id = aws_eip.k3s_master_eip.id
 }
 
-# --- EC2 INSTANCE: K3S WORKER (t3.medium - All Workloads) ---
-
-resource "aws_instance" "k3s_worker" {
-  ami                  = data.aws_ami.ubuntu.id
-  instance_type        = "m7i-flex.large"  # 8GB RAM: Ideal para todos os 7 serviços!
-  key_name             = aws_key_pair.budget_key.key_name
-  subnet_id            = data.terraform_remote_state.network.outputs.public_subnet_ids[1]
-  vpc_security_group_ids = [aws_security_group.k3s_cluster_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
-
-  root_block_device {
-    volume_size = 30
-    volume_type = "gp2"
-  }
-
-  user_data = base64encode(templatefile("${path.module}/scripts/user_data_worker.sh.tpl", {
-    master_private_ip = aws_instance.k3s_master.private_ip,
-    aws_region        = var.aws_region,
-    public_ip         = aws_eip.k3s_worker_eip.public_ip,
-    scripts_version   = var.scripts_version
-  }))
-
-  tags = {
-    Name = "${var.project_name}-k3s-worker"
-    Role = "worker"
-  }
-
-  depends_on = [aws_instance.k3s_master]
-}
-
-resource "aws_eip_association" "worker_eip_assoc" {
-  instance_id   = aws_instance.k3s_worker.id
-  allocation_id = aws_eip.k3s_worker_eip.id
-}
-
-# --- NULL RESOURCE: COPIAR TOKEN DO MASTER E CONFIGURAR WORKER ---
-
-resource "null_resource" "configure_worker" {
-  depends_on = [
-    aws_instance.k3s_master,
-    aws_instance.k3s_worker,
-    aws_eip_association.master_eip_assoc,
-    aws_eip_association.worker_eip_assoc
-  ]
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-    command = <<EOT
-      echo "⏳ Aguardando K3s Master estar pronto (120s)..."
-      sleep 120
-
-      echo "📥 Obtendo token do K3s Master..."
-      K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_master_eip.public_ip} \
-        'sudo cat /var/lib/rancher/k3s/server/node-token' 2>/dev/null)
-
-      if [ -z "$K3S_TOKEN" ]; then
-        echo "❌ Erro: Não foi possível obter o token do Master"
-        exit 1
-      fi
-
-      echo "✅ Token obtido: $${K3S_TOKEN:0:20}..."
-
-      echo "🔗 Configurando Worker para conectar ao Master..."
-      ssh -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_worker_eip.public_ip} << 'WORKER_EOF'
-        # Aguardar cloud-init finalizar
-        cloud-init status --wait || true
-
-        # Instalar K3s agent
-        echo "📦 Instalando K3s agent..."
-        curl -sfL https://get.k3s.io | K3S_URL=https://${aws_instance.k3s_master.private_ip}:6443 \
-          K3S_TOKEN="$K3S_TOKEN" \
-          INSTALL_K3S_EXEC="agent" \
-          sh -
-
-        echo "✅ K3s agent instalado"
-WORKER_EOF
-
-      echo "✅ Worker configurado com sucesso!"
-    EOT
-  }
-
-  triggers = {
-    always_run = "${timestamp()}"
-  }
-}
+# --- EC2 INSTANCE: K3S WORKER - REMOVIDO (otimizacao de custos) ---
+# Worker foi terminado para ficar dentro do Free Trial m7i-flex (750h/mes)
 
 # --- NULL RESOURCE: OBTER KUBECONFIG ---
 
 resource "null_resource" "get_kubeconfig" {
-  depends_on = [null_resource.configure_worker]
+  depends_on = [aws_instance.k3s_master]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]

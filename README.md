@@ -2,628 +2,812 @@
 
 [![Terraform](https://img.shields.io/badge/Terraform-1.5+-623CE4?logo=terraform)](https://www.terraform.io/)
 [![AWS](https://img.shields.io/badge/AWS-Cloud-FF9900?logo=amazon-aws)](https://aws.amazon.com/)
+[![K3s](https://img.shields.io/badge/K3s-1.28+-326CE5?logo=kubernetes)](https://k3s.io/)
 [![License](https://img.shields.io/badge/License-Academic-blue)](LICENSE)
 
 ## 📋 Descrição
 
-Este repositório centraliza toda a **Infrastructure as Code (IaC)** do projeto OficinaPro, utilizando Terraform para provisionar e gerenciar recursos na AWS. A infraestrutura suporta uma arquitetura de microserviços com autenticação serverless e aplicações containerizadas em Kubernetes.
+Este repositório centraliza toda a **Infrastructure as Code (IaC)** do projeto OficinaPro, utilizando Terraform para provisionar e gerenciar recursos na AWS. A infraestrutura suporta uma arquitetura de microserviços com autenticação serverless e aplicações containerizadas em K3s.
+
+**Fase Atual:** Fase 4 - Produção em K3s AWS com observabilidade completa
 
 ## 🎯 Propósito
 
 - Provisionar infraestrutura completa na AWS de forma automatizada
 - Garantir reprodutibilidade e versionamento da infraestrutura
-- Separar responsabilidades em módulos independentes (network, database, app, auth)
-- Facilitar o deploy e a manutenção através de pipelines CI/CD
+- Separar responsabilidades em módulos independentes
+- Facilitar o deploy através de pipelines CI/CD
+- Observabilidade e monitoramento completos
 
-## 🛠️ Tecnologias Utilizadas
+## 🛠️ Tecnologias e Serviços
 
 | Tecnologia | Versão | Descrição |
 |------------|--------|-----------|
 | **Terraform** | >= 1.5 | Infrastructure as Code |
 | **AWS Provider** | ~> 5.0 | Provider para recursos AWS |
+| **K3s** | 1.28+ | Kubernetes leve para edge/prod |
 | **GitHub Actions** | - | CI/CD Pipelines |
-| **AWS S3** | - | Backend remoto do Terraform |
-| **AWS DynamoDB** | - | Lock de estado do Terraform |
+| **Docker** | - | Containerização |
+| **OpenTelemetry** | 1.22+ | Observabilidade padronizada |
+| **New Relic** | - | APM e Monitoring |
 
 ### Serviços AWS Provisionados
 
-| Serviço | Uso |
-|---------|-----|
-| **VPC** | Rede virtual isolada |
-| **Subnets** | Públicas e privadas (multi-AZ) |
-| **NAT Gateway** | Saída de internet para subnets privadas |
-| **Internet Gateway** | Conectividade pública |
-| **EC2** | Instância K3s (Kubernetes leve) |
-| **ALB** | Load Balancer para aplicação |
-| **RDS PostgreSQL** | Banco de dados relacional |
-| **Lambda** | Funções serverless (autenticação) |
-| **API Gateway** | Gateway para APIs HTTP |
-| **CloudWatch** | Logs e métricas |
-| **Secrets Manager** | Gestão de segredos |
-| **IAM** | Roles e políticas de acesso |
+| Serviço | Uso | Custo/mês |
+|---------|-----|-----------|
+| **VPC** | Rede virtual isolada (10.1.0.0/16) | Grátis |
+| **Subnets** | Públicas e privadas (multi-AZ) | Grátis |
+| **Internet Gateway** | Conectividade pública | Grátis |
+| **EC2 (Master)** | K3s control plane (t3.small) | ~$15 |
+| **EC2 (Worker)** | K3s workloads (t3.small) | ~$15 |
+| **EIP** | IPs públicos fixos (2x) | ~$7 |
+| **ALB** | Load Balancer para apps | ~$18 |
+| **RDS PostgreSQL** | Database consolidado (db.t3.micro) | ~$15 |
+| **Lambda** | Funções serverless (Auth, Order) | <$5 |
+| **API Gateway** | Gateway HTTP para Lambdas | <$5 |
+| **ECR** | Container registry | <$1 |
+| **CloudWatch** | Logs e métricas | ~$5 |
+| **TOTAL** | - | **~$85/mês** |
 
 ## 📁 Estrutura do Repositório
 
 ```
 OficinaPro-DevOps/
-├── bootstrap/              # Backend remoto (S3 + DynamoDB)
+├── bootstrap/              # Backend remoto (S3 + DynamoDB) - executar primeiro!
 │   ├── main.tf
 │   ├── backend.tf
 │   └── variables.tf
-├── network/                # Infraestrutura de rede (VPC, Subnets, IGW, NAT)
+├── network/                # VPC, Subnets, IGW (10.1.0.0/16)
 │   ├── main.tf
 │   ├── backend.tf
 │   ├── outputs.tf
 │   └── variables.tf
-├── auth-infra/             # Infraestrutura de autenticação (Lambda + API GW)
+├── auth-infra/             # Lambda + API Gateway (Auth e Order)
 │   ├── main.tf
 │   ├── backend.tf
 │   └── variables.tf
-├── app-infra/              # Infraestrutura da aplicação (EC2, ALB, K3s)
+├── app-infra/              # EC2, ALB, K3s (Master + Worker)
 │   ├── main.tf
 │   ├── backend.tf
 │   ├── outputs.tf
 │   ├── variables.tf
 │   └── scripts/
 │       └── user_data.sh.tpl
-└── README.md
+└── .github/
+    └── workflows/          # Pipelines CI/CD
+        ├── bootstrap-infra.yml
+        ├── network-infra.yml
+        ├── auth-infra.yml
+        └── app-infra.yml
 ```
 
-## 🏗️ Arquitetura da Infraestrutura (Fase 4 - Produção)
+## 🏗️ Arquitetura da Infraestrutura (Fase 4)
 
-### Cluster K3s Multi-Node (2 Nodes)
+### Cluster K3s em Produção
 
 ```
-┌────────────────────────────────────────────────────────────────────────────────────┐
-│                                   AWS CLOUD                                         │
-│  ┌──────────────────────────────────────────────────────────────────────────────┐  │
-│  │                            VPC (10.0.0.0/16)                                  │  │
-│  │                                                                               │  │
-│  │  ┌────────────────────────────┐    ┌────────────────────────────┐            │  │
-│  │  │    Public Subnet 1 (AZ-A)  │    │    Public Subnet 2 (AZ-B)  │            │  │
-│  │  │      (10.0.1.0/24)         │    │      (10.0.2.0/24)         │            │  │
-│  │  │                            │    │                            │            │  │
-│  │  │  ┌──────────────────────┐  │    │  ┌──────────────────────┐  │            │  │
-│  │  │  │  K3s Master Node     │  │    │  │  K3s Worker Node     │  │            │  │
-│  │  │  │  ─────────────────   │  │    │  │  ─────────────────   │  │            │  │
-│  │  │  │  Type: t3.small      │  │    │  │  Type: m7i-flex.large│  │            │  │
-│  │  │  │  RAM:  2GB           │  │    │  │  RAM:  8GB           │  │            │  │
-│  │  │  │  Role: control-plane │  │    │  │  Role: worker        │  │            │  │
-│  │  │  │  IP:   54.147.109.116│  │    │  │  IP:   34.197.144.129│  │            │  │
-│  │  │  │                      │  │    │  │                      │  │            │  │
-│  │  │  │  🎯 Control Plane    │◀─┼────┼──│  🚀 Workloads        │  │            │  │
-│  │  │  │  • API Server        │  │    │  │  • 7 Microservices   │  │            │  │
-│  │  │  │  • Scheduler         │  │    │  │  • Java/Python/Go    │  │            │  │
-│  │  │  │  • Controller Mgr    │  │    │  │  • High Memory Pool  │  │            │  │
-│  │  │  └──────────────────────┘  │    │  └──────────────────────┘  │            │  │
-│  │  │           │                │    │           │                │            │  │
-│  │  │           └────────────────┼────┼───────────┘                │            │  │
-│  │  │                   ▼        │    │                            │            │  │
-│  │  │        ┌──────────────────┐│    │                            │            │  │
-│  │  │        │Internal ALB      ││    │                            │            │  │
-│  │  │        │(VPC Link)        ││    │                            │            │  │
-│  │  │        └──────────────────┘│    │                            │            │  │
-│  │  └────────────────────────────┘    └────────────────────────────┘            │  │
-│  │                                                                               │  │
-│  │  ┌────────────────────────────┐    ┌────────────────────────────┐            │  │
-│  │  │   Private Subnet 1 (AZ-A)  │    │   Private Subnet 2 (AZ-B)  │            │  │
-│  │  │     (10.0.3.0/24)          │    │     (10.0.4.0/24)          │            │  │
-│  │  │                            │    │                            │            │  │
-│  │  │  ┌──────────────────────┐  │    │  ┌──────────────────────┐  │            │  │
-│  │  │  │  RDS PostgreSQL      │  │    │  │  Lambda Functions    │  │            │  │
-│  │  │  │  ──────────────────  │  │    │  │  ──────────────────  │  │            │  │
-│  │  │  │  Multi-AZ: Enabled   │  │    │  │  • Auth Gateway      │  │            │  │
-│  │  │  │  Backup: Automated   │  │    │  │  • Order Handler     │  │            │  │
-│  │  │  └──────────────────────┘  │    │  └──────────────────────┘  │            │  │
-│  │  └────────────────────────────┘    └────────────────────────────┘            │  │
-│  │                                                                               │  │
-│  └──────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                     │
-│  ┌──────────────────────────────────────────────────────────────────────────────┐  │
-│  │                            SERVIÇOS GERENCIADOS                               │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐        │  │
-│  │  │API Gateway  │  │ CloudWatch  │  │Secrets Mgr   │  │  ECR        │        │  │
-│  │  │(REST/HTTP)  │  │  Logs/Métr. │  │(Credentials) │  │ (Imagens)   │        │  │
-│  │  └─────────────┘  └─────────────┘  └──────────────┘  └─────────────┘        │  │
-│  └──────────────────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────────────────┘
-
-📊 Capacidade Total do Cluster:
-   • Master: 2GB RAM (Control Plane + serviços leves)
-   • Worker: 8GB RAM (7 microserviços + overhead)
-   • Total:  10GB RAM disponível
-   • Versão K3s: v1.34.3+k3s3
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              AWS us-east-1                                    │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                       VPC (10.1.0.0/16)                                 │  │
+│  │                                                                         │  │
+│  │  ┌────────────────────────┐        ┌────────────────────────┐          │  │
+│  │  │  Public Subnet (AZ-A)  │        │  Public Subnet (AZ-B)  │          │  │
+│  │  │    (10.1.0.0/24)       │        │    (10.1.1.0/24)       │          │  │
+│  │  │                        │        │                        │          │  │
+│  │  │  ┌──────────────────┐  │        │  ┌──────────────────┐  │          │  │
+│  │  │  │ K3s Master Node  │  │        │  │ K3s Worker Node  │  │          │  │
+│  │  │  │ ───────────────  │  │        │  │ ───────────────  │  │          │  │
+│  │  │  │ t3.small (2GB)   │  │        │  │ t3.small (2GB)   │  │          │  │
+│  │  │  │ 44.214.64.63     │  │        │  │ 34.228.205.101   │  │          │  │
+│  │  │  │ Control Plane    │◀─┼────────┼──│ Workloads        │  │          │  │
+│  │  │  └──────────────────┘  │        │  └──────────────────┘  │          │  │
+│  │  │           │            │        │           │            │          │  │
+│  │  │           ▼            │        │           ▼            │          │  │
+│  │  │    ┌─────────────┐    │        │    ┌─────────────┐    │          │  │
+│  │  │    │  ALB Target │    │        │    │  ALB Target │    │          │  │
+│  │  │    │   Group     │    │        │    │   Group     │    │          │  │
+│  │  │    └─────────────┘    │        │    └─────────────┘    │          │  │
+│  │  └────────────────────────┘        └────────────────────────┘          │  │
+│  │                                                                         │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐    │  │
+│  │  │                Private Subnet (10.1.10.0/24)                   │    │  │
+│  │  │                                                                 │    │  │
+│  │  │  ┌──────────────────────────────────────────────────────────┐  │    │  │
+│  │  │  │  RDS PostgreSQL (Multi-AZ)                               │  │    │  │
+│  │  │  │  ──────────────────────────────                          │  │    │  │
+│  │  │  │  oficinapro-consolidated-db.cmz0ic48gh2u.us-east-1...    │  │    │  │
+│  │  │  │  db.t3.micro                                             │  │    │  │
+│  │  │  │  Database: os_db                                         │  │    │  │
+│  │  │  │  User: oficinapro_admin                                  │  │    │  │
+│  │  │  └──────────────────────────────────────────────────────────┘  │    │  │
+│  │  └────────────────────────────────────────────────────────────────┘    │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                                                               │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                      SERVERLESS (Lambda + API GW)                       │  │
+│  │  ┌──────────────────┐              ┌──────────────────┐                │  │
+│  │  │  Auth Service    │              │  Order Service   │                │  │
+│  │  │  (Go Function)   │              │  (Go Function)   │                │  │
+│  │  └──────────────────┘              └──────────────────┘                │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 🚀 Passos para Execução e Deploy
+**Microserviços no K3s:**
+1. ✅ **saga-orchestrator** (Java/Spring Boot) - Coordenação de sagas
+2. ✅ **billing-service** (Java/Spring Boot) - Faturamento
+3. ✅ **customer-service** (Java/Spring Boot) - Gestão de clientes
+4. ✅ **execution-service** (Java/Spring Boot) - Execução de ordens
+5. ✅ **payment-api** (Python/FastAPI) - Integração Mercado Pago
+
+**Serverless (Lambda):**
+6. ✅ **auth-service** (Go) - Autenticação JWT
+7. ✅ **order-service** (Go) - Gestão de ordens
+
+## 🚀 Guia de Deploy
 
 ### Pré-requisitos
 
-- [Terraform](https://www.terraform.io/downloads.html) >= 1.5
-- [AWS CLI](https://aws.amazon.com/cli/) configurado com credenciais
-- Conta AWS com permissões adequadas
-- Par de chaves SSH (para acesso à EC2)
-
-### Variáveis de Ambiente Necessárias
-
 ```bash
-export AWS_ACCESS_KEY_ID="sua-access-key"
-export AWS_SECRET_ACCESS_KEY="sua-secret-key"
-export AWS_REGION="us-east-1"
-export TF_VAR_ssh_public_key="ssh-rsa AAAAB3..."
-export TF_VAR_db_password="senha-segura-do-banco"
+# Instalar ferramentas
+brew install terraform awscli kubectl  # macOS
+# ou
+sudo apt-get install terraform awscli  # Linux
+
+# Configurar AWS
+aws configure
+# AWS Access Key ID: <sua-key>
+# AWS Secret Access Key: <sua-secret>
+# Default region name: us-east-1
 ```
 
-### 1. Bootstrap (Executar apenas uma vez)
+### Ordem de Execução
 
-Cria o bucket S3 e tabela DynamoDB para o backend remoto do Terraform.
+#### 1. Bootstrap (executar apenas uma vez)
 
 ```bash
 cd bootstrap/
 terraform init
-terraform apply
+terraform apply -auto-approve
 ```
 
-### 2. Network (Rede)
+**O que provisiona:**
+- Bucket S3: `fiap-oficinapro-ckm-tfstate`
+- DynamoDB Table: `oficinapro-tfstate-lock-table`
 
-Provisiona VPC, Subnets, Internet Gateway e NAT Gateway.
+#### 2. Network (Rede)
 
 ```bash
 cd ../network/
 terraform init
-terraform apply
+terraform apply -auto-approve
 ```
 
-### 3. Database (Banco de Dados)
+**O que provisiona:**
+- VPC `10.1.0.0/16`
+- 2 Public Subnets (`10.1.0.0/24`, `10.1.1.0/24`)
+- 1 Private Subnet (`10.1.10.0/24`)
+- Internet Gateway
+- Route Tables
 
-Provisiona o RDS PostgreSQL (ver repositório `OficinaPro-Database`).
-
-### 4. Auth Infrastructure
-
-Provisiona Lambda e API Gateway para autenticação.
+#### 3. Database (ver repo OficinaPro-Database)
 
 ```bash
-cd ../auth-infra/
+cd ../../OficinaPro-Database/
 terraform init
-terraform apply
+terraform apply -auto-approve
 ```
 
-### 5. App Infrastructure
+**O que provisiona:**
+- RDS PostgreSQL `os_db`
+- Security Groups
+- Subnet Groups
 
-Provisiona EC2, ALB e configura K3s.
+#### 4. Auth Infrastructure
+
+```bash
+cd ../OficinaPro-DevOps/auth-infra/
+terraform init
+terraform apply -auto-approve
+```
+
+**O que provisiona:**
+- Lambda Functions (Auth + Order)
+- API Gateway HTTP
+- IAM Roles
+
+#### 5. App Infrastructure (K3s)
 
 ```bash
 cd ../app-infra/
 terraform init
 terraform apply
+
+# Será solicitado:
+# - github_repo: Seu GitHub username
+# - github_token: Personal Access Token do GitHub
 ```
 
-### Deploy via GitHub Actions
+**O que provisiona:**
+- 2x EC2 instances (Master + Worker)
+- K3s instalado e configurado
+- ALB (Application Load Balancer)
+- Security Groups
+- IAM Instance Profiles
+- 2x Elastic IPs
 
-Os workflows estão configurados para execução manual (`workflow_dispatch`):
+#### 6. Configurar kubectl
 
-1. **Bootstrap Infra Backend** - Executar primeiro (uma única vez)
-2. **Network Infra CI/CD** - Criar/destruir rede
-3. **App Infra CI/CD** - Criar/destruir aplicação
-4. **Auth Infra CI/CD** - Criar/destruir autenticação
+```bash
+# Copiar kubeconfig do Master
+ssh -i ~/.ssh/chave_nova ubuntu@44.214.64.63 "sudo cat /etc/rancher/k3s/k3s.yaml" > k3s-config.yaml
 
-## 📊 Outputs Importantes
+# Atualizar IP
+sed -i 's/127.0.0.1/44.214.64.63/g' k3s-config.yaml
 
-### Network
+# Configurar
+export KUBECONFIG=$(pwd)/k3s-config.yaml
 
-| Output | Descrição | Valor Atual |
-|--------|-----------|-------------|
-| `vpc_id` | ID da VPC criada | `vpc-xxxxx` |
-| `public_subnet_ids` | IDs das subnets públicas | `[subnet-A, subnet-B]` |
-| `private_subnet_ids` | IDs das subnets privadas | `[subnet-C, subnet-D]` |
+# Testar
+kubectl get nodes
+kubectl get namespaces
+```
 
-### App Infrastructure (K3s Cluster)
+## 🔄 CI/CD Pipeline
 
-| Output | Descrição | Valor Atual |
-|--------|-----------|-------------|
-| `alb_dns_name` | DNS do ALB interno | `internal-fiap-oficinapro-kb-alb-2036754655.us-east-1.elb.amazonaws.com` |
-| `k3s_master_public_ip` | IP público do Master | `54.147.109.116` |
-| `k3s_worker_public_ip` | IP público do Worker | `34.197.144.129` |
-| `k3s_master_private_ip` | IP privado do Master | `10.0.1.104` |
-| `k3s_worker_private_ip` | IP privado do Worker | `10.0.2.213` |
-| `cluster_api_endpoint` | API do K3s | `https://54.147.109.116:6443` |
-| `ssh_master_command` | Comando SSH Master | `ssh -i ~/.ssh/chave_nova ubuntu@54.147.109.116` |
-| `ssh_worker_command` | Comando SSH Worker | `ssh -i ~/.ssh/chave_nova ubuntu@34.197.144.129` |
+### GitHub Actions Workflows
 
-### Auth Infrastructure
+Todos os workflows estão em `.github/workflows/`:
 
-| Output | Descrição |
-|--------|-----------|
-| `api_gateway_url` | URL do API Gateway |
-| `lambda_auth_function_name` | Nome da função Lambda de Auth |
-| `lambda_order_function_name` | Nome da função Lambda de Order |
+| Workflow | Trigger | Descrição |
+|----------|---------|-----------|
+| `bootstrap-infra.yml` | Manual | Provisiona S3 + DynamoDB (executar primeiro) |
+| `network-infra.yml` | Manual | Provisiona VPC e redes |
+| `auth-infra.yml` | Manual | Provisiona Lambda + API GW |
+| `app-infra.yml` | Manual | Provisiona K3s cluster |
+
+### Secrets do GitHub Necessários
+
+Configure em `Settings > Secrets and variables > Actions`:
+
+| Secret | Descrição | Exemplo |
+|--------|-----------|---------|
+| `AWS_ACCESS_KEY_ID` | Credencial AWS | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | Credencial AWS | `wJalr...` |
+| `K3S_SSH_PRIVATE_KEY` | Chave SSH para K3s | Conteúdo do arquivo `.pem` |
+| `DB_PASSWORD` | Senha do RDS | `K9fQ7T2mLE8ZxPOficinaPro` |
+| `NEW_RELIC_LICENSE_KEY` | License do New Relic | `eu01xxf5c...` |
+| `MP_TOKEN` | Token Mercado Pago | `TEST-872...` |
+
+### Fluxo de Deploy dos Microserviços
+
+Cada repositório de microserviço tem seu próprio pipeline:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         GITHUB ACTIONS FLOW                           │
+│                                                                       │
+│  1. Trigger (Push/PR/Manual)                                         │
+│         │                                                             │
+│         ▼                                                             │
+│  2. Build & Test                                                     │
+│     - Maven/Gradle (Java)                                            │
+│     - Go build                                                       │
+│     - Docker build                                                   │
+│         │                                                             │
+│         ▼                                                             │
+│  3. Push to ECR                                                      │
+│     - aws ecr get-login-password                                     │
+│     - docker build --platform linux/amd64                            │
+│     - docker push 315974965680.dkr.ecr.us-east-1.amazonaws.com      │
+│         │                                                             │
+│         ▼                                                             │
+│  4. Deploy to K3s                                                    │
+│     - SSH to Master Node (44.214.64.63)                              │
+│     - kubectl set image deployment/<app> <image>:<new-tag>           │
+│     - kubectl rollout status deployment/<app>                        │
+│         │                                                             │
+│         ▼                                                             │
+│  5. Health Check                                                     │
+│     - kubectl get pods -n oficinapro                                 │
+│     - curl http://<pod>:<port>/health                                │
+│     - curl http://<pod>:<port>/actuator/health                       │
+│         │                                                             │
+│         ▼                                                             │
+│  6. Notify (Success/Failure)                                         │
+│     - Slack notification (opcional)                                  │
+│     - Update deployment status                                       │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+## 📊 Arquitetura de Observabilidade
+
+### Stack Completo
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                       NEW RELIC APM                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                │
+│  │   Traces    │  │  Metrics    │  │    Logs     │                │
+│  │  (OTLP)     │  │  (OTLP)     │  │ (Correlated)│                │
+│  └─────────────┘  └─────────────┘  └─────────────┘                │
+└────────────────────────────────────────────────────────────────────┘
+         ▲                  ▲                  ▲
+         │                  │                  │
+         │    OTLP/HTTP (4318)                 │
+         │                  │                  │
+┌────────────────────────────────────────────────────────────────────┐
+│                   K3s CLUSTER (5 Microserviços)                     │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐  │
+│  │ Saga     │ │ Billing  │ │ Customer │ │Execution │ │Payment │  │
+│  │ (Java)   │ │ (Java)   │ │ (Java)   │ │ (Java)   │ │(Python)│  │
+│  │ :8080    │ │ :8082    │ │ :8084    │ │ :8083    │ │ :8000  │  │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘  │
+│       │             │             │             │            │      │
+│       └─────────────┴─────────────┴─────────────┴────────────┘      │
+│                              │                                       │
+│                              ▼                                       │
+│                    ┌──────────────────┐                             │
+│                    │  RDS PostgreSQL  │                             │
+│                    │  (os_db)         │                             │
+│                    └──────────────────┘                             │
+└────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                 SERVERLESS (Lambda + API GW)                        │
+│  ┌──────────────────┐              ┌──────────────────┐            │
+│  │  Auth Service    │              │  Order Service   │            │
+│  │  (Go Lambda)     │              │  (Go Lambda)     │            │
+│  └──────────────────┘              └──────────────────┘            │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Métricas Monitoradas
+
+**Por Aplicação (New Relic APM):**
+- ✅ Request Rate (req/s)
+- ✅ Error Rate (%)
+- ✅ Latência (P50, P95, P99)
+- ✅ Throughput (MB/s)
+- ✅ CPU/Memory Usage
+- ✅ Database Query Performance
+
+**Por Infraestrutura (CloudWatch + New Relic):**
+- ✅ EC2 Instance Health
+- ✅ K3s Node Status
+- ✅ Pod Status/Restarts
+- ✅ ALB Target Health
+- ✅ RDS Connections/CPU
+- ✅ Lambda Invocations/Errors
 
 ## 🛠️ Comandos Úteis
 
 ### Kubernetes (K3s)
 
 ```bash
-# Verificar status dos nodes
+# Exportar kubeconfig
+export KUBECONFIG=/path/to/k3s-config.yaml
+
+# Verificar nodes
 kubectl get nodes -o wide
 
-# Listar todos os pods em produção
-kubectl get pods -n oficinapro-prod -o wide
+# Listar todos os pods
+kubectl get pods -n oficinapro -o wide
 
-# Ver logs de um pod específico
-kubectl logs -f <pod-name> -n oficinapro-prod
+# Ver logs de um pod
+kubectl logs -f <pod-name> -n oficinapro
 
 # Descrever pod (troubleshooting)
-kubectl describe pod <pod-name> -n oficinapro-prod
+kubectl describe pod <pod-name> -n oficinapro
 
 # Verificar deployments
-kubectl get deployments -n oficinapro-prod
+kubectl get deployments -n oficinapro
 
-# Verificar serviços
-kubectl get svc -n oficinapro-prod
+# Verificar services
+kubectl get svc -n oficinapro
 
-# Escalar deployment manualmente
-kubectl scale deployment/<app> --replicas=3 -n oficinapro-prod
+# Escalar deployment
+kubectl scale deployment/<app> --replicas=3 -n oficinapro
 
-# Restart deployment (rolling update)
-kubectl rollout restart deployment/<app> -n oficinapro-prod
+# Restart deployment
+kubectl rollout restart deployment/<app> -n oficinapro
 
 # Ver histórico de rollout
-kubectl rollout history deployment/<app> -n oficinapro-prod
+kubectl rollout history deployment/<app> -n oficinapro
 
-# Reverter para versão anterior
-kubectl rollout undo deployment/<app> -n oficinapro-prod
+# Health check de um pod
+kubectl exec -n oficinapro <pod> -- wget -qO- http://localhost:<port>/health
 ```
 
-### SSH e Acesso
+### SSH e Acesso aos Nodes
 
 ```bash
 # SSH no Master Node
-ssh -i ~/.ssh/chave_nova ubuntu@54.147.109.116
+ssh -i ~/.ssh/chave_nova ubuntu@44.214.64.63
 
-# SSH no Worker Node
-ssh -i ~/.ssh/chave_nova ubuntu@34.197.144.129
+# Verificar status do K3s
+sudo systemctl status k3s
+sudo journalctl -u k3s -n 50 --no-pager
 
-# Copiar kubeconfig do Master
-scp -i ~/.ssh/chave_nova ubuntu@54.147.109.116:/home/ubuntu/.kube/config ~/.kube/config
+# Verificar recursos
+free -h
+df -h
+top
 
-# SSM Session Manager (alternativa ao SSH)
-aws ssm start-session --target i-06db73f4f711cdb4d --region us-east-1  # Master
-aws ssm start-session --target i-0a5fbffaead628ca5 --region us-east-1  # Worker
+# SSH no Worker Node (se configurado)
+ssh -i ~/.ssh/chave_nova ubuntu@34.228.205.101
+
+# Verificar status do K3s Agent
+sudo systemctl status k3s-agent
 ```
 
-### ECR (Elastic Container Registry)
+### ECR (Container Registry)
 
 ```bash
-# Login no ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 315974965680.dkr.ecr.us-east-1.amazonaws.com
+# Login
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin \
+  315974965680.dkr.ecr.us-east-1.amazonaws.com
 
 # Listar repositórios
 aws ecr describe-repositories --region us-east-1
 
-# Listar imagens de um repositório
-aws ecr list-images --repository-name <repo-name> --region us-east-1
-
-# Pull imagem
-docker pull 315974965680.dkr.ecr.us-east-1.amazonaws.com/<repo>:<tag>
-
-# Push imagem
-docker tag <image>:<tag> 315974965680.dkr.ecr.us-east-1.amazonaws.com/<repo>:<tag>
-docker push 315974965680.dkr.ecr.us-east-1.amazonaws.com/<repo>:<tag>
+# Build e Push (IMPORTANTE: use AMD64 para AWS!)
+docker build --platform linux/amd64 -t <app>:latest .
+docker tag <app>:latest 315974965680.dkr.ecr.us-east-1.amazonaws.com/<app>:latest
+docker push 315974965680.dkr.ecr.us-east-1.amazonaws.com/<app>:latest
 ```
 
 ### Terraform
 
 ```bash
-# Planejar mudanças
-terraform plan
-
-# Aplicar mudanças
-terraform apply
-
-# Destruir recursos (CUIDADO!)
-terraform destroy
+# Ver estado atual
+terraform show
 
 # Ver outputs
 terraform output
 
-# Forçar unlock do state (se necessário)
+# Atualizar um módulo específico
+terraform apply -target=aws_instance.k3s_master
+
+# Destruir recursos (CUIDADO!)
+terraform destroy
+
+# Forçar unlock do state
 terraform force-unlock <LOCK_ID>
 
 # Importar recurso existente
-terraform import <resource_type>.<name> <id>
+terraform import aws_instance.master i-045c8b690fe628714
 ```
 
-### Monitoramento
+### Troubleshooting
 
 ```bash
-# Ver métricas do node Master
-ssh ubuntu@54.147.109.116 "top -bn1 | head -20"
+# Verificar state lock do Terraform
+aws dynamodb scan --table-name oficinapro-tfstate-lock-table --region us-east-1
 
-# Ver métricas do node Worker
-ssh ubuntu@34.197.144.129 "top -bn1 | head -20"
+# Deletar lock manualmente (se necessário)
+aws dynamodb delete-item \
+  --table-name oficinapro-tfstate-lock-table \
+  --key '{"LockID":{"S":"oficinapro/app-infra/terraform.tfstate-md5"}}' \
+  --region us-east-1
 
-# Ver logs do K3s no Master
-ssh ubuntu@54.147.109.116 "sudo journalctl -u k3s -n 100 --no-pager"
+# Verificar security groups
+aws ec2 describe-security-groups --region us-east-1 --query 'SecurityGroups[*].[GroupId,GroupName]'
 
-# Ver logs do K3s no Worker
-ssh ubuntu@34.197.144.129 "sudo journalctl -u k3s-agent -n 100 --no-pager"
+# Verificar instâncias EC2
+aws ec2 describe-instances --region us-east-1 --filters "Name=instance-state-name,Values=running"
 
-# Verificar uso de disco
-kubectl exec -it <pod> -n oficinapro-prod -- df -h
+# Reboot instância K3s
+aws ec2 reboot-instances --instance-ids i-045c8b690fe628714 --region us-east-1
+```
 
-# Verificar consumo de recursos por pod
-kubectl top pods -n oficinapro-prod
+## 📦 Outputs da Infraestrutura
 
-# Verificar consumo de recursos por node
-kubectl top nodes
+### Informações do Cluster K3s
+
+```bash
+# No diretório app-infra/
+terraform output
+
+# Outputs disponíveis:
+# - alb_dns_name
+# - k3s_master_public_ip: 44.214.64.63
+# - k3s_master_private_ip: 10.1.0.177
+# - cluster_api_endpoint: https://44.214.64.63:6443
+# - ssh_master_command
+```
+
+### Database Connection
+
+```bash
+# Host: oficinapro-consolidated-db.cmz0ic48gh2u.us-east-1.rds.amazonaws.com
+# Port: 5432
+# Database: os_db
+# User: oficinapro_admin
+# Password: (armazenado em secrets)
+
+# Connection string para Spring Boot:
+# jdbc:postgresql://oficinapro-consolidated-db.cmz0ic48gh2u.us-east-1.rds.amazonaws.com:5432/os_db
 ```
 
 ## 🔐 Segurança
 
-- **Security Groups**: Configurados com princípio do menor privilégio
-- **IAM Roles**: Roles específicas para cada serviço
-- **Secrets Manager**: Gestão segura de credenciais
-- **VPC**: Isolamento de rede com subnets públicas e privadas
-- **HTTPS**: Tráfego criptografado via ALB
+### Security Groups
 
-## 📚 Documentação Relacionada
+| SG | Nome | Portas Permitidas | Uso |
+|----|------|-------------------|-----|
+| `sg-0ad0deffa387fa08f` | k3s-sg | 22, 6443, 80, 443 | K3s Nodes |
+| `sg-0eec3b20db7084042` | rds-sg | 5432 (from K3s SG) | RDS |
 
-| Documento | Descrição |
-|-----------|-----------|
-| [Arquitetura Geral](../core-domain-service/docs/ARCHITECTURE.md) | Visão geral da arquitetura |
-| [Database](../OficinaPro-Database/README.md) | Infraestrutura do banco |
-| [Auth Service](../auth-oficinapro/README.md) | Serviço de autenticação |
-| [Core Service](../core-domain-service/README.md) | Serviço principal |
-| [Payments](../OficinaPro-Payments/README.md) | Serviço de pagamentos |
+### IAM Roles
 
-## 🔄 Ordem de Deploy
+| Role | Serviço | Políticas |
+|------|---------|-----------|
+| `oficinapro-k3s-role-fase4` | EC2 | SSM, ECR, CloudWatch |
+| `auth-lambda-role` | Lambda | Logs, DynamoDB |
+| `order-lambda-role` | Lambda | Logs, SQS, SNS |
 
-```mermaid
-graph TD
-    A[1. Bootstrap] --> B[2. Network]
-    B --> C[3. Database]
-    C --> D[4. Auth Infra]
-    D --> E[5. App Infra]
-    E --> F[6. Deploy K8s Apps]
-```
+### Secrets Management
 
-## 💰 Custos (Fase 4 - Produção)
+**Kubernetes Secrets (K3s):**
+- `database-secrets`: Credenciais do RDS
+- `newrelic-secrets`: License key New Relic
+- `oficinapro-secrets`: MP_TOKEN, DB_PASSWORD
+- `ecr-secret`: Credenciais Docker ECR
 
-### Configuração Atual
-
-| Recurso | Tipo | Custo Estimado |
-|---------|------|----------------|
-| **Master Node** | t3.small (2GB) | ~$15/mês |
-| **Worker Node** | m7i-flex.large (8GB) | ~$50/mês |
-| **RDS PostgreSQL** | db.t3.micro | ~$15/mês |
-| **ALB** | Application Load Balancer | ~$18/mês |
-| **EIP** | 2x Elastic IPs | ~$7/mês |
-| **Data Transfer** | Variável | ~$5-10/mês |
-| **Lambda** | Pay-per-use | <$5/mês |
-| **CloudWatch** | Logs + Métricas | ~$5/mês |
-| **ECR** | Container Registry | <$1/mês |
-| **TOTAL ESTIMADO** | - | **~$120-130/mês** |
-
-### Justificativa da Arquitetura
-
-- ✅ **m7i-flex.large no Worker**: 8GB RAM necessários para rodar 7 microserviços Java/Python/Go simultaneamente
-- ✅ **t3.small no Master**: 2GB suficiente para K3s control plane
-- ✅ **Separação de responsabilidades**: Control plane isolado do workload
-- ✅ **Alta disponibilidade**: Multi-AZ para RDS e distribuição de pods
-
-### Otimizações Aplicadas
-
-1. **Eliminação do NAT Gateway** (~$32/mês economizados)
-2. **K3s ao invés de EKS** (~$72/mês economizados)
-3. **RDS db.t3.micro** ao invés de instâncias maiores
-4. **Uso de Elastic IPs** ao invés de NAT para saída
-
-## 🔄 CI/CD Pipeline Detalhado
-
-### Arquitetura de Deploy
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        GITHUB ACTIONS                                │
-│                                                                      │
-│  ┌────────────────┐    ┌────────────────┐    ┌────────────────┐    │
-│  │  1. Build      │ -> │  2. Test       │ -> │  3. Push ECR   │    │
-│  │  - Maven/Npm   │    │  - Unit Tests  │    │  - Docker Build│    │
-│  │  - Go Build    │    │  - Integration │    │  - Tag/Push    │    │
-│  └────────────────┘    └────────────────┘    └────────────────┘    │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌────────────────┐    ┌────────────────┐    ┌────────────────┐    │
-│  │  4. Deploy K8s │ -> │  5. Health     │ -> │  6. Notify     │    │
-│  │  - SSH to      │    │  - Check Pods  │    │  - Slack/Email │    │
-│  │    Master      │    │  - Readiness   │    │  - Metrics     │    │
-│  │  - kubectl     │    │  - Liveness    │    │                │    │
-│  └────────────────┘    └────────────────┘    └────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Fluxo de Deploy por Microserviço
-
-#### 1. **Trigger**
-- Push na branch `main`/`master`/`develop`
-- Pull Request (apenas build+test)
-- Manual dispatch
-
-#### 2. **Build & Test**
-```yaml
-- Checkout código
-- Setup ambiente (Java/Node/Go/Python)
-- Build da aplicação
-- Testes unitários e integração
-- Análise de qualidade (SonarQube opcional)
-```
-
-#### 3. **Containerização**
-```yaml
-- Login no ECR
-- Build imagem Docker
-- Tag: <repo>:<sha>-<timestamp>
-- Push para ECR (315974965680.dkr.ecr.us-east-1.amazonaws.com)
-```
-
-#### 4. **Deploy Kubernetes**
-```yaml
-- SSH no Master Node (54.147.109.116)
-- Atualizar imagem no deployment
-- kubectl set image deployment/<app> <container>=<nova-imagem>
-- Aguardar rollout completo
-```
-
-#### 5. **Verificação**
-```yaml
-- kubectl get pods -n oficinapro-prod
-- kubectl rollout status deployment/<app>
-- Health check via HTTP endpoints
-```
-
-### Secrets Configurados
-
-| Secret | Uso | Repositórios |
-|--------|-----|--------------|
-| `AWS_ACCESS_KEY_ID` | Acesso AWS | Todos |
-| `AWS_SECRET_ACCESS_KEY` | Acesso AWS | Todos |
-| `K3S_SSH_PRIVATE_KEY` | Deploy no K3s | Todos |
-| `DB_PASSWORD` | Conexão RDS | Core, Billing, Customer, Execution |
-| `NEW_RELIC_LICENSE_KEY` | Observabilidade | Todos |
-| `JWT_SECRET` | Autenticação | Auth, Core |
-| `MP_TOKEN` | Mercado Pago | Payments |
-
-## 📊 Monitoramento e Observabilidade
-
-### Stack de Observabilidade
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          NEW RELIC APM                               │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐        │
-│  │  Traces        │  │  Metrics       │  │  Logs          │        │
-│  │  - Latência    │  │  - CPU/RAM     │  │  - Erros       │        │
-│  │  - Throughput  │  │  - Request/s   │  │  - Audit Trail │        │
-│  │  - Erros       │  │  - P95/P99     │  │  - Debug       │        │
-│  └────────────────┘  └────────────────┘  └────────────────┘        │
-└─────────────────────────────────────────────────────────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   APLICAÇÕES (OpenTelemetry)                         │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │
-│  │Core (Java│ │Auth (Go) │ │Payments  │ │Saga      │              │
-│  │ Spring)  │ │          │ │(Python)  │ │(Java)    │  ... +3      │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘              │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Métricas Coletadas
-
-#### **Por Aplicação:**
-- ✅ Request Rate (req/s)
-- ✅ Error Rate (%)
-- ✅ Latência (P50, P95, P99)
-- ✅ Throughput (MB/s)
-- ✅ CPU e Memory Usage
-- ✅ JVM Metrics (para Java)
-- ✅ Database Query Performance
-
-#### **Por Infraestrutura (K3s):**
-- ✅ Node Health (Master + Worker)
-- ✅ Pod Status e Restarts
-- ✅ Resource Utilization
-- ✅ Network I/O
-- ✅ Disk Usage
-
-### Alertas Configurados
-
-| Alerta | Condição | Ação |
-|--------|----------|------|
-| **High Error Rate** | Error > 5% por 5min | Slack + Email |
-| **High Latency** | P95 > 2s por 5min | Slack |
-| **Pod Crash** | Restarts > 3 em 10min | Email + PagerDuty |
-| **CPU/Memory High** | >80% por 10min | Slack |
-| **Database Slow Query** | Query > 5s | Email |
-
-### Dashboards
-
-1. **Overview Geral**: Status de todos os serviços
-2. **Por Microserviço**: Métricas específicas de cada app
-3. **Infraestrutura K3s**: Nodes, Pods, Resources
-4. **Database**: Queries, Connections, Performance
-5. **Business Metrics**: Orders, Payments, Customers
+**GitHub Secrets:**
+- Ver seção "Secrets do GitHub Necessários" acima
 
 ## 🏛️ Decisões Arquiteturais (ADRs)
 
-### ADR-001: Cluster K3s Multi-Node
+### ADR-001: K3s ao invés de EKS
 
-**Contexto:**
-- Necessidade de rodar 7 microserviços simultaneamente
-- Requisitos de alta disponibilidade
-- Separação de responsabilidades
+**Contexto:** EKS custa $72/mês apenas pelo control plane.
 
-**Decisão:**
-- 1x Master Node (t3.small, 2GB): Control plane isolado
-- 1x Worker Node (m7i-flex.large, 8GB): Workloads
+**Decisão:** Usar K3s (Kubernetes leve) em EC2 instances.
 
 **Consequências:**
+- ✅ Economia de ~$72/mês
+- ✅ Controle total sobre o cluster
+- ⚠️ Responsabilidade por manutenção do control plane
+- ⚠️ Single point of failure no Master (mitigado por backups)
+
+### ADR-002: Multi-Node Cluster
+
+**Contexto:** 7 microserviços com diferentes workloads (Java ~1GB RAM cada).
+
+**Decisão:** 
+- Master: t3.small (2GB) - control plane isolado
+- Worker: t3.small (2GB) - workloads (pode ser escalado)
+
+**Consequências:**
+- ✅ Isolamento entre control plane e workloads
 - ✅ Melhor utilização de recursos
-- ✅ Escalabilidade horizontal futura
-- ✅ Isolamento de control plane
-- ⚠️ Custo mensal de ~$65 (vs ~$30 single-node)
+- ✅ Facilita escalabilidade horizontal
+- ⚠️ Custo adicional (~$15/mês por node extra)
 
-### ADR-002: Eliminação do NAT Gateway
+### ADR-003: Autenticação Serverless
 
-**Contexto:**
-- NAT Gateway custa ~$32/mês
-- Instâncias K3s em subnet pública com EIP
+**Contexto:** Auth service tem padrão de uso bursty.
 
-**Decisão:**
-- Usar Elastic IPs (~$7/mês) ao invés de NAT Gateway
-
-**Consequências:**
-- ✅ Economia de ~$25/mês
-- ✅ IPs públicos fixos para acesso
-- ⚠️ Exposição direta à internet (mitigado por Security Groups)
-
-### ADR-003: New Relic APM
-
-**Contexto:**
-- Necessidade de observabilidade centralizada
-- Múltiplas linguagens (Java, Go, Python)
-
-**Decisão:**
-- New Relic APM com OpenTelemetry
-
-**Consequências:**
-- ✅ Visibilidade completa de traces, métricas e logs
-- ✅ Suporte nativo para Java, Go, Python, Node.js
-- ✅ Dashboards e alertas prontos
-- ⚠️ Custo adicional (free tier até 100GB/mês)
-
-### ADR-004: Autenticação Serverless (Lambda)
-
-**Contexto:**
-- Auth e Order services precisam escalar independentemente
-- Padrão de uso bursty
-
-**Decisão:**
-- Lambda + API Gateway para auth/order
+**Decisão:** Lambda + API Gateway para auth-service e order-service.
 
 **Consequências:**
 - ✅ Auto-scaling automático
 - ✅ Pay-per-use (~$5/mês)
 - ✅ Zero manutenção de infra
-- ⚠️ Cold start (~200-500ms primeira req)
+- ⚠️ Cold start (~200-500ms)
 
-## 💰 Custos
+### ADR-004: New Relic APM
+
+**Contexto:** Necessidade de observabilidade centralizada para múltiplas linguagens.
+
+**Decisão:** New Relic com OpenTelemetry (OTLP).
+
+**Consequências:**
+- ✅ Suporte nativo para Java, Go, Python
+- ✅ Traces, Metrics e Logs correlacionados
+- ✅ Dashboards e Alertas prontos
+- ✅ Free tier até 100GB/mês
+- ⚠️ Overhead de ~5-10ms por request
+
+## 🐛 Troubleshooting Common Issues
+
+### Issue 1: Terraform State Locked
+
+**Erro:**
+```
+Error acquiring the state lock
+```
+
+**Solução:**
+```bash
+# Verificar locks
+aws dynamodb scan --table-name oficinapro-tfstate-lock-table --region us-east-1
+
+# Force unlock
+terraform force-unlock <LOCK_ID>
+
+# Se falhar, deletar manualmente no DynamoDB
+aws dynamodb delete-item \
+  --table-name oficinapro-tfstate-lock-table \
+  --key '{"LockID":{"S":"oficinapro/app-infra/terraform.tfstate-md5"}}' \
+  --region us-east-1
+```
+
+### Issue 2: SSH Timeout para K3s Nodes
+
+**Erro:**
+```
+ssh: connect to host 44.214.64.63 port 22: Operation timed out
+```
+
+**Verificar:**
+```bash
+# Status da instância
+aws ec2 describe-instances --instance-ids i-045c8b690fe628714 --region us-east-1
+
+# Security Group rules
+aws ec2 describe-security-groups --group-ids sg-0ad0deffa387fa08f --region us-east-1
+
+# Reboot se necessário
+aws ec2 reboot-instances --instance-ids i-045c8b690fe628714 --region us-east-1
+```
+
+### Issue 3: Pods em ImagePullBackOff
+
+**Erro:**
+```
+Failed to pull image: unauthorized
+```
+
+**Solução:**
+```bash
+# Recriar ecr-secret
+kubectl delete secret ecr-secret -n oficinapro
+kubectl create secret docker-registry ecr-secret \
+  --docker-server=315974965680.dkr.ecr.us-east-1.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password="$(aws ecr get-login-password --region us-east-1)" \
+  --namespace=oficinapro
+```
+
+### Issue 4: Database Connection Failed
+
+**Erro:**
+```
+FATAL: password authentication failed for user "oficinapro_admin"
+```
+
+**Verificar:**
+```bash
+# Ver secrets atuais
+kubectl get secret database-secrets -n oficinapro -o yaml
+
+# Recriar com credenciais corretas
+kubectl delete secret database-secrets -n oficinapro
+kubectl create secret generic database-secrets \
+  --from-literal=DB_NAME="os_db" \
+  --from-literal=DB_HOST="oficinapro-consolidated-db.cmz0ic48gh2u.us-east-1.rds.amazonaws.com" \
+  --from-literal=DB_PORT="5432" \
+  --from-literal=DB_USER="oficinapro_admin" \
+  --from-literal=DB_USERNAME="oficinapro_admin" \
+  --from-literal=DB_PASSWORD="K9fQ7T2mLE8ZxPOficinaPro" \
+  --from-literal=SPRING_DATASOURCE_URL="jdbc:postgresql://oficinapro-consolidated-db.cmz0ic48gh2u.us-east-1.rds.amazonaws.com:5432/os_db" \
+  --from-literal=SPRING_DATASOURCE_USERNAME="oficinapro_admin" \
+  --from-literal=SPRING_DATASOURCE_PASSWORD="K9fQ7T2mLE8ZxPOficinaPro" \
+  --namespace=oficinapro
+
+# Restart pods
+kubectl rollout restart deployment/<app> -n oficinapro
+```
+
+### Issue 5: VPC Mismatch
+
+**Erro:**
+```
+java.net.UnknownHostException: oficinapro-consolidated-db...
+```
+
+**Causa:** K3s e RDS em VPCs diferentes.
+
+**Solução:**
+- Verificar que todos os recursos estão em `vpc-0c206d03a5b4bfb6b`
+- Se necessário, destruir e recriar K3s cluster
+- Atualizar Terraform remote state se necessário
+
+## 📚 Documentação Relacionada
+
+| Documento | Descrição |
+|-----------|-----------|
+| [FASE4_DEPLOYMENT_SUCCESS.md](/Users/kbmarins/Desktop/Personal/FIAP/FASE4_DEPLOYMENT_SUCCESS.md) | Relatório de deploy bem-sucedido |
+| [RESUMO_FINAL_DEPLOYMENT_FASE4.md](/Users/kbmarins/Desktop/Personal/FIAP/RESUMO_FINAL_DEPLOYMENT_FASE4.md) | Resumo executivo completo |
+| [PAYMENT_API_DEPLOYMENT_SUCCESS.md](/Users/kbmarins/Desktop/Personal/FIAP/PAYMENT_API_DEPLOYMENT_SUCCESS.md) | Deploy do Payment API |
+| [ANALISE_DEPLOYMENT_PAYMENTS.md](/Users/kbmarins/Desktop/Personal/FIAP/ANALISE_DEPLOYMENT_PAYMENTS.md) | Análise arquitetural (Lambda vs K3s) |
+| [Core Service Docs](../core-domain-service/docs/) | Documentação completa da aplicação |
+| [Database Infra](../OficinaPro-Database/README.md) | Infraestrutura do banco de dados |
+
+## 🔄 Fluxo de Atualização da Infraestrutura
+
+### Modificações na Rede (Network)
+
+```bash
+cd network/
+# 1. Editar main.tf
+# 2. Planejar
+terraform plan
+# 3. Aplicar
+terraform apply
+# 4. Verificar outputs
+terraform output
+```
+
+### Modificações no Cluster (App Infra)
+
+```bash
+cd app-infra/
+# 1. Editar main.tf
+# 2. Planejar
+terraform plan
+# 3. Aplicar
+terraform apply
+# 4. Verificar nodes
+export KUBECONFIG=/path/to/k3s-config.yaml
+kubectl get nodes
+```
+
+### Rollback de Infraestrutura
+
+```bash
+# 1. Identificar versão anterior no S3
+aws s3 ls s3://fiap-oficinapro-ckm-tfstate/oficinapro/app-infra/
+
+# 2. Importar state anterior (se disponível)
+aws s3 cp s3://fiap-oficinapro-ckm-tfstate/oficinapro/app-infra/terraform.tfstate.backup ./
+
+# 3. Aplicar destroy + apply
+terraform destroy -target=<recurso-problemático>
+terraform apply
+```
+
+## 💡 Melhores Práticas
+
+### 1. Builds Docker
+- **SEMPRE** usar `--platform linux/amd64` ao buildar em Mac M1/M2
+- Tagging consistente: `<repo>:<sha>-<timestamp>`
+- Usar multi-stage builds para reduzir tamanho
+- Scan de vulnerabilidades antes do push
+
+### 2. Deploys Kubernetes
+- Usar `imagePullPolicy: Always` para garantir imagem mais recente
+- Configurar liveness e readiness probes em todos os pods
+- Definir resources (requests/limits) para prevenção de OOMKill
+- Usar HPA (Horizontal Pod Autoscaler) para auto-scaling
+
+### 3. Secrets Management
+- **NUNCA** commitar secrets no Git
+- Usar GitHub Secrets para CI/CD
+- Usar Kubernetes Secrets para runtime
+- Rotacionar senhas periodicamente
+
+### 4. Monitoramento
+- Configurar alertas para erros críticos
+- Revisar dashboards semanalmente
+- Analisar logs de erro diariamente
+- Tune de métricas baseado em uso real
 
 ## 👥 Equipe
 
-Desenvolvido para o **Tech Challenge da FIAP**.
+Desenvolvido para o **Tech Challenge da FIAP** - Fase 4.
 
 ---
 
-**Status**: ✅ Produção Ready
-**Última atualização**: Janeiro de 2026
+**Status**: ✅ Produção em K3s AWS  
+**Cluster**: 44.214.64.63 (Master) + 34.228.205.101 (Worker)  
+**CI/CD**: ✅ GitHub Actions Automatizado  
+**Observabilidade**: ✅ New Relic APM  
+**Database**: ✅ RDS PostgreSQL Multi-AZ  
+**Última atualização**: Fevereiro de 2026

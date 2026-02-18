@@ -21,13 +21,13 @@ on:
 
 jobs:
   terraform:
-    name: 'Terraform App Infra - K3s Cluster (2 Nodes)'
+    name: 'Terraform App Infra - K3s Cluster (Single Node Spot)'
     runs-on: ubuntu-latest
     outputs:
       k3s_master_ip: ${{ steps.outputs.outputs.master_ip }}
-      k3s_worker_ip: ${{ steps.outputs.outputs.worker_ip }}
       alb_dns: ${{ steps.outputs.outputs.alb_dns }}
       cluster_status: ${{ steps.verify_cluster.outputs.status }}
+      spot_instance_status: ${{ steps.verify_spot.outputs.status }}
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -77,13 +77,14 @@ jobs:
       if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       run: |
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔍 PLANEJANDO INFRAESTRUTURA K3S"
+        echo "🔍 PLANEJANDO INFRAESTRUTURA K3S (FASE 4 - OTIMIZADA)"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
         echo "📦 Configuração do Cluster:"
-        echo "  • Master Node: t3.small (2GB RAM)"
-        echo "  • Worker Node: m7i-flex.large (8GB RAM)"
-        echo "  • Total: 10GB RAM disponível"
+        echo "  • Master Node: m7i-flex.large (8GB RAM) - SPOT INSTANCE"
+        echo "  • Economia: ~85% vs On-Demand"
+        echo "  • Total: 8GB RAM disponível"
+        echo "  • Behavior: STOP (preserva EBS e EIP)"
         echo ""
         terraform plan -out=tfplan
 
@@ -108,26 +109,81 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
         MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || echo "")
-        WORKER_IP=$(terraform output -raw k3s_worker_public_ip 2>/dev/null || echo "")
         ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
         CLUSTER_API=$(terraform output -raw cluster_api_endpoint 2>/dev/null || echo "")
         
         echo "master_ip=$MASTER_IP" >> $GITHUB_OUTPUT
-        echo "worker_ip=$WORKER_IP" >> $GITHUB_OUTPUT
         echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
         
         echo ""
-        echo "🖥️  Master Node IP: $MASTER_IP"
-        echo "🚀 Worker Node IP: $WORKER_IP"
+        echo "🖥️  Master Node (Spot) IP: $MASTER_IP"
         echo "🌐 ALB DNS: $ALB_DNS"
         echo "🔗 Cluster API: $CLUSTER_API"
         echo ""
         
-        # Salvar IPs no Parameter Store para outros workflows
+        # Salvar Master IP no Parameter Store para outros workflows
         aws ssm put-parameter --name "/oficinapro/k3s/master-ip" --value "$MASTER_IP" --type "String" --overwrite --region us-east-1
-        aws ssm put-parameter --name "/oficinapro/k3s/worker-ip" --value "$WORKER_IP" --type "String" --overwrite --region us-east-1
         
-        echo "💾 IPs salvos no AWS Parameter Store"
+        echo "💾 Master IP salvo no AWS Parameter Store"
+
+    - name: Verify Spot Instance
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: verify_spot
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "💰 VERIFICANDO STATUS DA SPOT INSTANCE"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip)
+        
+        # Buscar instance ID pelo Master IP
+        INSTANCE_ID=$(aws ec2 describe-instances \
+          --filters "Name=ip-address,Values=${MASTER_IP}" "Name=instance-state-name,Values=running" \
+          --query 'Reservations[0].Instances[0].InstanceId' \
+          --output text 2>/dev/null)
+        
+        if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+          echo "⚠️  Não foi possível determinar Instance ID"
+          echo "status=unknown" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        echo "🔍 Instance ID: $INSTANCE_ID"
+        
+        # Verificar se é Spot Instance
+        LIFECYCLE=$(aws ec2 describe-instances \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].InstanceLifecycle' \
+          --output text 2>/dev/null)
+        
+        # Obter tipo e behavior
+        INSTANCE_TYPE=$(aws ec2 describe-instances \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].InstanceType' \
+          --output text)
+        
+        SPOT_BEHAVIOR=$(aws ec2 describe-instances \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].SpotInstanceRequestId' \
+          --output text 2>/dev/null)
+        
+        echo ""
+        if [ "$LIFECYCLE" == "spot" ]; then
+          echo "✅ Master Node está rodando como SPOT INSTANCE!"
+          echo "   Instance Type: ${INSTANCE_TYPE}"
+          echo "   Lifecycle: Spot"
+          echo "   Behavior: STOP (preserva EBS e EIP)"
+          echo "   Economia: ~85% vs On-Demand"
+          echo "status=spot" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️  Master Node NÃO é Spot Instance"
+          echo "   Instance Type: ${INSTANCE_TYPE}"
+          echo "   Lifecycle: ${LIFECYCLE:-on-demand}"
+          echo "   💸 CUSTO ALTO: ~10x mais caro que Spot"
+          echo "status=on-demand" >> $GITHUB_OUTPUT
+        fi
+        echo ""
 
     - name: Verify K3s Cluster
       if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
@@ -177,20 +233,24 @@ jobs:
         echo "════════════════════════════════════════════════════════"
         echo ""
         echo "📋 Recursos Criados:"
-        echo "  ✅ Master Node (t3.small - 2GB RAM)"
-        echo "  ✅ Worker Node (m7i-flex.large - 8GB RAM)"
+        echo "  ✅ Master Node (m7i-flex.large - 8GB RAM) - SPOT"
         echo "  ✅ Application Load Balancer (interno)"
         echo "  ✅ Security Groups (K3s + ALB)"
-        echo "  ✅ 2x Elastic IPs (IPs públicos fixos)"
-        echo "  ✅ IAM Roles (ECR, SSM)"
+        echo "  ✅ Elastic IP (IP público fixo)"
+        echo "  ✅ IAM Roles (ECR, SSM, SQS)"
         echo ""
         echo "🔗 Conectividade:"
         echo "  Master IP: ${{ steps.outputs.outputs.master_ip }}"
-        echo "  Worker IP: ${{ steps.outputs.outputs.worker_ip }}"
         echo "  ALB DNS: ${{ steps.outputs.outputs.alb_dns }}"
         echo ""
-        echo "💰 Custo Estimado:"
-        echo "  ~$65/mês (Master + Worker + ALB + EIPs)"
+        echo "💰 Custo Estimado (Spot Instance):"
+        echo "  ~$38-42/mês (Master Spot + ALB + RDS)"
+        echo "  Economia: 85% vs Master On-Demand"
+        echo ""
+        echo "⚠️  Comportamento Spot:"
+        echo "  • Interruption Behavior: STOP"
+        echo "  • EBS e EIP são preservados"
+        echo "  • Ao reiniciar, mantém mesmo IP público"
         echo ""
         echo "🚀 Próximos Passos:"
         echo "  1. Aguarde 2-5 minutos para K3s completar setup"
@@ -207,9 +267,9 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
         echo "⚠️  ATENÇÃO: Esta ação irá destruir:"
-        echo "  • 2x EC2 Instances (Master + Worker)"
+        echo "  • EC2 Master Instance (Spot)"
         echo "  • Application Load Balancer"
-        echo "  • 2x Elastic IPs"
+        echo "  • Elastic IP"
         echo "  • Security Groups"
         echo "  • Todos os deployments Kubernetes"
         echo ""
