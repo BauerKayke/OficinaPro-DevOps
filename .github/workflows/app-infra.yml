@@ -11,30 +11,33 @@ on:
         options:
         - apply
         - destroy
-      scripts_version:
-        description: 'Versão dos scripts (para forçar atualização do user_data)'
-        required: false
-        default: 'v13-ssm'
-        type: string
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'app-infra/**'
+      - '.github/workflows/app-infra.yml'
 
 jobs:
   terraform:
-    name: 'Terraform App Infra'
+    name: 'Terraform App Infra - K3s Cluster (2 Nodes)'
     runs-on: ubuntu-latest
     outputs:
-      ec2_public_ip: ${{ steps.ec2_ip.outputs.ip }}
+      k3s_master_ip: ${{ steps.outputs.outputs.master_ip }}
+      k3s_worker_ip: ${{ steps.outputs.outputs.worker_ip }}
       alb_dns: ${{ steps.outputs.outputs.alb_dns }}
+      cluster_status: ${{ steps.verify_cluster.outputs.status }}
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
-      TF_VAR_github_token: ${{ secrets.GH_TOKEN }} # Token clássico (PAT)
-      TF_VAR_github_repo: "BauerKayke/OficinaPro-KaykeBauer" # Repositório da aplicação
-      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }} # Senha do RDS
-      TF_VAR_ssh_private_key_path: "./private_key.pem" # Caminho para a chave privada
-      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }} # Chave pública para o Key Pair
-      TF_VAR_scripts_version: ${{ github.event.inputs.scripts_version || 'v13-ssm' }} # Versão dos scripts
+      TF_VAR_github_token: "dummy-token"
+      TF_VAR_github_repo: "https://github.com/BauerKayke/core-domain-service"
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      TF_VAR_ssh_private_key_path: "./chave_nova"
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
     defaults:
       run:
@@ -46,187 +49,170 @@ jobs:
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
 
     - name: Setup SSH Key
       run: |
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
-        echo "" >> private_key.pem # Garante quebra de linha final
-        chmod 600 private_key.pem
+        echo "🔐 Configurando chave SSH..."
+        echo "${{ secrets.K3S_SSH_PRIVATE_KEY }}" > chave_nova
+        echo "" >> chave_nova
+        chmod 600 chave_nova
+        
+        echo "✅ Chave SSH configurada"
       shell: bash
 
     - name: Terraform Init
-      run: terraform init
+      run: |
+        echo "🔄 Inicializando Terraform..."
+        terraform init
+        echo "✅ Terraform inicializado"
 
     - name: Terraform Validate
-      run: terraform validate
+      run: |
+        echo "✅ Validando configuração..."
+        terraform validate
 
     - name: Terraform Plan
-      if: ${{ github.event.inputs.action == 'apply' }}
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       run: |
-        echo "🔍 Planejando infraestrutura..."
-        echo "Versão dos scripts: $TF_VAR_scripts_version"
-        terraform plan -lock=false -out=tfplan
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔍 PLANEJANDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "📦 Configuração do Cluster:"
+        echo "  • Master Node: t3.small (2GB RAM)"
+        echo "  • Worker Node: m7i-flex.large (8GB RAM)"
+        echo "  • Total: 10GB RAM disponível"
+        echo ""
+        terraform plan -out=tfplan
 
     - name: Terraform Apply
-      if: ${{ github.event.inputs.action == 'apply' }}
-      # Cria infra com IAM Instance Profile para SSM + user_data atualizado
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: apply
       run: |
-        echo "🚀 Aplicando infraestrutura..."
-        echo "Versão dos scripts: $TF_VAR_scripts_version"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🚀 APLICANDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
-        echo "📋 Mudanças incluídas:"
-        echo "  ✅ IAM Role ec2-ssm-role (permissões SSM)"
-        echo "  ✅ Instance Profile anexado à EC2"
-        echo "  ✅ User data com proteção SSH"
-        echo "  ✅ Suporte a deploy via SSM (não requer SSH)"
+        terraform apply -auto-approve tfplan
         echo ""
-        terraform apply -lock=false -auto-approve tfplan
+        echo "✅ Terraform apply concluído!"
 
-    - name: Save IP to AWS Parameter Store
-      if: ${{ github.event.inputs.action == 'apply' }}
-      run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        if [ -n "$EC2_IP" ]; then
-          echo "💾 Salvando IP no AWS Parameter Store..."
-          aws ssm put-parameter \
-            --name "/oficinapro/k3s/ec2-public-ip" \
-            --value "$EC2_IP" \
-            --type "String" \
-            --overwrite \
-            --region us-east-1
-          echo "✅ IP salvo em: /oficinapro/k3s/ec2-public-ip"
-        fi
-
-    - name: Output EC2 IP
-      if: ${{ github.event.inputs.action == 'apply' }}
-      id: ec2_ip
-      run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        echo "EC2 Public IP: $EC2_IP"
-        echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
-        echo ""
-        echo "⚠️  IMPORTANTE: Use este IP nos deployments:"
-        echo "   IP: $EC2_IP"
-        echo ""
-        echo "💡 Você pode usar o output 'ec2_public_ip' deste job em outros workflows!"
-
-    - name: Capture All Outputs
-      if: ${{ github.event.inputs.action == 'apply' }}
+    - name: Capture Outputs
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       id: outputs
       run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📊 OUTPUTS DA INFRAESTRUTURA"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || echo "")
+        WORKER_IP=$(terraform output -raw k3s_worker_public_ip 2>/dev/null || echo "")
         ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
+        CLUSTER_API=$(terraform output -raw cluster_api_endpoint 2>/dev/null || echo "")
+        
+        echo "master_ip=$MASTER_IP" >> $GITHUB_OUTPUT
+        echo "worker_ip=$WORKER_IP" >> $GITHUB_OUTPUT
         echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
-        echo "ALB DNS: $ALB_DNS"
+        
+        echo ""
+        echo "🖥️  Master Node IP: $MASTER_IP"
+        echo "🚀 Worker Node IP: $WORKER_IP"
+        echo "🌐 ALB DNS: $ALB_DNS"
+        echo "🔗 Cluster API: $CLUSTER_API"
+        echo ""
+        
+        # Salvar IPs no Parameter Store para outros workflows
+        aws ssm put-parameter --name "/oficinapro/k3s/master-ip" --value "$MASTER_IP" --type "String" --overwrite --region us-east-1
+        aws ssm put-parameter --name "/oficinapro/k3s/worker-ip" --value "$WORKER_IP" --type "String" --overwrite --region us-east-1
+        
+        echo "💾 IPs salvos no AWS Parameter Store"
 
-    - name: Verify SSM Agent Status
-      if: ${{ github.event.inputs.action == 'apply' }}
+    - name: Verify K3s Cluster
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: verify_cluster
       run: |
-        echo "════════════════════════════════════════════════════════"
-        echo "  🔍 VERIFICANDO SSM AGENT"
-        echo "════════════════════════════════════════════════════════"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔍 VERIFICANDO CLUSTER K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
-
-        # Obter Instance ID
-        INSTANCE_ID=$(aws ec2 describe-instances \
-          --filters "Name=tag:Name,Values=*k3s-node*" "Name=instance-state-name,Values=running" \
-          --query "Reservations[*].Instances[*].InstanceId" \
-          --output text --region us-east-1)
-
-        if [ -z "$INSTANCE_ID" ]; then
-          echo "⚠️  Nenhuma instância encontrada (pode estar inicializando)"
-          echo "   Aguarde 3-5 minutos e verifique manualmente"
-          exit 0
-        fi
-
-        echo "Instance ID: $INSTANCE_ID"
-        echo ""
-        echo "⏳ Aguardando SSM Agent ficar online (timeout: 3 minutos)..."
-        echo ""
-
-        MAX_ATTEMPTS=12  # 3 minutos (15s x 12)
-        ATTEMPT=1
-
-        while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-          echo "Tentativa $ATTEMPT de $MAX_ATTEMPTS..."
-
-          SSM_STATUS=$(aws ssm describe-instance-information \
-            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-            --query "InstanceInformationList[0].PingStatus" \
-            --output text 2>/dev/null || echo "NotFound")
-
-          if [ "$SSM_STATUS" == "Online" ]; then
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip)
+        
+        echo "⏳ Aguardando K3s ficar pronto (timeout: 5 minutos)..."
+        
+        for i in {1..20}; do
+          echo "Tentativa $i/20..."
+          
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
             echo ""
-            echo "✅ SSM Agent está ONLINE!"
+            echo "✅ Cluster K3s está operacional!"
+            
             echo ""
-            echo "📋 Informações da instância:"
-            aws ssm describe-instance-information \
-              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-              --query "InstanceInformationList[0].[InstanceId,PingStatus,PlatformType,PlatformVersion]" \
-              --output table
+            echo "📊 Status dos Nodes:"
+            ssh -o StrictHostKeyChecking=no -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes -o wide"
+            
             echo ""
-            echo "🚀 A instância está pronta para deploy via SSM!"
-            echo ""
-            echo "💡 Próximos passos:"
-            echo "   1. Execute o workflow de deploy do core-domain-service"
-            echo "   2. O deploy usará SSM (não requer SSH)"
-            echo ""
+            echo "📦 Namespaces:"
+            ssh -o StrictHostKeyChecking=no -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get namespaces"
+            
+            echo "status=ready" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          echo "   Status: $SSM_STATUS (aguardando...)"
-
-          if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-            sleep 15
-          fi
-
-          ATTEMPT=$((ATTEMPT + 1))
+          
+          sleep 15
         done
-
+        
         echo ""
-        echo "⚠️  SSM Agent não ficou online após 3 minutos."
-        echo ""
-        echo "📋 Isso é NORMAL - a instância pode levar 5-10 minutos para:"
-        echo "   - Completar user_data (K3s + configurações)"
-        echo "   - SSM Agent se registrar"
-        echo ""
-        echo "🔍 Verificar manualmente em 5 minutos:"
-        echo "   aws ssm describe-instance-information \\"
-        echo "     --filters \"Key=InstanceIds,Values=$INSTANCE_ID\" \\"
-        echo "     --region us-east-1"
-        echo ""
-        echo "✅ Infraestrutura aplicada com sucesso!"
-        echo "   (SSM Agent será verificado no próximo deploy)"
-        echo ""
+        echo "⚠️  Cluster ainda não está pronto (pode levar até 10 minutos)"
+        echo "   Isso é normal para a primeira execução"
+        echo "status=pending" >> $GITHUB_OUTPUT
 
     - name: Summary
-      if: ${{ github.event.inputs.action == 'apply' }}
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       run: |
         echo "════════════════════════════════════════════════════════"
-        echo "  ✅ INFRAESTRUTURA APLICADA COM SUCESSO"
+        echo "  ✅ INFRAESTRUTURA K3S APLICADA COM SUCESSO"
         echo "════════════════════════════════════════════════════════"
         echo ""
-        echo "📋 Mudanças implementadas:"
-        echo "  ✅ EC2 com IAM Instance Profile (permissões SSM)"
-        echo "  ✅ IAM Role: ec2-ssm-role"
-        echo "  ✅ User data atualizado (v$TF_VAR_scripts_version)"
-        echo "  ✅ Proteção SSH após K3s"
-        echo "  ✅ Suporte a deploy via AWS Systems Manager"
+        echo "📋 Recursos Criados:"
+        echo "  ✅ Master Node (t3.small - 2GB RAM)"
+        echo "  ✅ Worker Node (m7i-flex.large - 8GB RAM)"
+        echo "  ✅ Application Load Balancer (interno)"
+        echo "  ✅ Security Groups (K3s + ALB)"
+        echo "  ✅ 2x Elastic IPs (IPs públicos fixos)"
+        echo "  ✅ IAM Roles (ECR, SSM)"
         echo ""
-        echo "🔐 Segurança:"
-        echo "  ✅ Deploy não requer SSH (usa SSM)"
-        echo "  ✅ Comunicação criptografada via AWS API"
-        echo "  ✅ Auditoria via CloudTrail"
-        echo ""
-        echo "📍 Outputs:"
-        echo "  EC2 IP: ${{ steps.ec2_ip.outputs.ip }}"
+        echo "🔗 Conectividade:"
+        echo "  Master IP: ${{ steps.outputs.outputs.master_ip }}"
+        echo "  Worker IP: ${{ steps.outputs.outputs.worker_ip }}"
         echo "  ALB DNS: ${{ steps.outputs.outputs.alb_dns }}"
         echo ""
-        echo "🚀 Próximo passo:"
-        echo "  Execute o workflow de deploy do core-domain-service"
-        echo "  https://github.com/BauerKayke/OficinaPro-KaykeBauer/actions"
+        echo "💰 Custo Estimado:"
+        echo "  ~$65/mês (Master + Worker + ALB + EIPs)"
+        echo ""
+        echo "🚀 Próximos Passos:"
+        echo "  1. Aguarde 2-5 minutos para K3s completar setup"
+        echo "  2. Execute pipelines de deploy dos microserviços"
+        echo "  3. Verifique pods: kubectl get pods -n oficinapro-prod"
         echo ""
         echo "════════════════════════════════════════════════════════"
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
-      run: terraform destroy -lock=false -auto-approve
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🗑️  DESTRUINDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "⚠️  ATENÇÃO: Esta ação irá destruir:"
+        echo "  • 2x EC2 Instances (Master + Worker)"
+        echo "  • Application Load Balancer"
+        echo "  • 2x Elastic IPs"
+        echo "  • Security Groups"
+        echo "  • Todos os deployments Kubernetes"
+        echo ""
+        terraform destroy -auto-approve
+        echo ""
+        echo "✅ Infraestrutura destruída!"

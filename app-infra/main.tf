@@ -83,7 +83,7 @@ resource "aws_security_group" "alb_sg" {
   tags = { Name = "${var.project_name}-alb-sg" }
 }
 
-# ALB Público
+# ALB Interno
 resource "aws_lb" "app_alb" {
   name               = "${var.project_name}-alb"
   internal           = true  # Interno para funcionar com VPC Link usando Listener ARN
@@ -104,13 +104,15 @@ resource "aws_lb_target_group" "app_tg" {
   vpc_id   = data.terraform_remote_state.network.outputs.vpc_id
 
   health_check {
-    path                = "/api/v1/actuator/health" # Health Check da aplicação (Spring Boot context-path=/api/v1)
+    path                = "/api/v1/actuator/health"
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
     matcher             = "200"
   }
+
+  tags = { Name = "${var.project_name}-tg" }
 }
 
 # Listener HTTP (Porta 80)
@@ -125,18 +127,24 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Associação do EC2 ao Target Group
-resource "aws_lb_target_group_attachment" "ec2_attach" {
+# Associação das instâncias ao Target Group (ambas)
+resource "aws_lb_target_group_attachment" "master_attach" {
   target_group_arn = aws_lb_target_group.app_tg.arn
-  target_id        = aws_instance.k3s_node.id
+  target_id        = aws_instance.k3s_master.id
   port             = 80
 }
 
-# --- IAM ROLE E INSTANCE PROFILE PARA EC2 (SSM) ---
+resource "aws_lb_target_group_attachment" "worker_attach" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.k3s_worker.id
+  port             = 80
+}
 
-# IAM Role para a instância EC2 (permite SSM Session Manager)
+# --- IAM ROLE E INSTANCE PROFILE PARA EC2 (SSM + ECR) ---
+
+# IAM Role para a instância EC2
 resource "aws_iam_role" "ec2_ssm_role" {
-  name = "${var.project_name}-ec2-ssm-role"
+  name = "${var.project_name}-k3s-role-fase4"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -149,7 +157,7 @@ resource "aws_iam_role" "ec2_ssm_role" {
     }]
   })
 
-  tags = { Name = "${var.project_name}-ec2-ssm-role" }
+  tags = { Name = "${var.project_name}-k3s-role-fase4" }
 }
 
 # Anexar política gerenciada AmazonSSMManagedInstanceCore
@@ -158,59 +166,65 @@ resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Instance Profile (conecta a Role à instância EC2)
-resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "${var.project_name}-ec2-profile"
-  role = aws_iam_role.ec2_ssm_role.name
-
-  tags = { Name = "${var.project_name}-ec2-profile" }
+# Anexar política para ECR (ReadOnly)
+resource "aws_iam_role_policy_attachment" "ecr_read_only" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-# --- RECURSOS DA INSTÂNCIA EC2 (K3s) ---
+# Instance Profile (conecta a Role às instâncias EC2)
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "${var.project_name}-k3s-profile-fase4"
+  role = aws_iam_role.ec2_ssm_role.name
 
-# Security Group para K3s (Restrito)
-resource "aws_security_group" "k3s_sg" {
-  name        = "${var.project_name}-k3s-sg-v5" # v5 para forçar recriação
-  description = "Security group para o cluster K3s"
+  tags = { Name = "${var.project_name}-k3s-profile-fase4" }
+}
+
+# --- SECURITY GROUP PARA K3S CLUSTER (2 NODES) ---
+
+# Security Group para K3s Cluster
+resource "aws_security_group" "k3s_cluster_sg" {
+  name        = "${var.project_name}-k3s-cluster-sg"
+  description = "Security group para cluster K3s (master + worker)"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
-  tags = { Name = "${var.project_name}-k3s-sg-v5" }
+  tags = { Name = "${var.project_name}-k3s-cluster-sg" }
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-# Regra: SSH liberado (necessário para CI/CD via SSH Action)
+# Regra: SSH liberado (necessário para CI/CD)
 resource "aws_security_group_rule" "ingress_ssh" {
   type              = "ingress"
   from_port         = 22
   to_port           = 22
   protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"] # Idealmente restringir ao GitHub Actions IP
-  security_group_id = aws_security_group.k3s_sg.id
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k3s_cluster_sg.id
   description       = "SSH para CI/CD"
 }
 
-# Regra: API Server (necessário para kubectl remoto se usado)
+# Regra: K3s API Server (6443) - Master exposto
 resource "aws_security_group_rule" "ingress_k3s_api" {
   type              = "ingress"
   from_port         = 6443
   to_port           = 6443
   protocol          = "tcp"
   cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.k3s_sg.id
-  description       = "K3s API server externo"
+  security_group_id = aws_security_group.k3s_cluster_sg.id
+  description       = "K3s API server"
 }
 
-# Regra: HTTP (80) APENAS do ALB (Segurança!)
+# Regra: HTTP (80) APENAS do ALB
 resource "aws_security_group_rule" "ingress_http_from_alb" {
   type                     = "ingress"
   from_port                = 80
   to_port                  = 80
   protocol                 = "tcp"
-  source_security_group_id = aws_security_group.alb_sg.id # Apenas tráfego do ALB
-  security_group_id        = aws_security_group.k3s_sg.id
+  source_security_group_id = aws_security_group.alb_sg.id
+  security_group_id        = aws_security_group.k3s_cluster_sg.id
   description              = "HTTP apenas via ALB"
 }
 
@@ -221,19 +235,19 @@ resource "aws_security_group_rule" "ingress_https_from_alb" {
   to_port                  = 443
   protocol                 = "tcp"
   source_security_group_id = aws_security_group.alb_sg.id
-  security_group_id        = aws_security_group.k3s_sg.id
+  security_group_id        = aws_security_group.k3s_cluster_sg.id
   description              = "HTTPS apenas via ALB"
 }
 
-# Regra: Interna (Node-to-Node)
+# Regra: Comunicação Interna K3s (self) - Todas as portas
 resource "aws_security_group_rule" "ingress_k3s_internal" {
   type              = "ingress"
   from_port         = 0
   to_port           = 65535
   protocol          = "-1"
   self              = true
-  security_group_id = aws_security_group.k3s_sg.id
-  description       = "Comunicacao interna entre nodes/pods"
+  security_group_id = aws_security_group.k3s_cluster_sg.id
+  description       = "Comunicacao interna K3s (node-to-node, pod-to-pod)"
 }
 
 # Regra: Egress (Tudo liberado)
@@ -243,29 +257,39 @@ resource "aws_security_group_rule" "egress_all" {
   to_port           = 0
   protocol          = "-1"
   cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.k3s_sg.id
+  security_group_id = aws_security_group.k3s_cluster_sg.id
   description       = "Permitir toda saida"
 }
 
-# Key Pair
+# --- KEY PAIR ---
+
 resource "aws_key_pair" "budget_key" {
-  key_name   = "${var.project_name}-budget-key-v11" # v11
+  key_name   = "${var.project_name}-budget-key-v12"
   public_key = var.ssh_public_key
 }
 
-# Elastic IP (Necessário para manter IP fixo para SSH e DNS se não usarmos ALB, mas aqui mantemos para SSH)
-resource "aws_eip" "k3s_eip" {
+# --- ELASTIC IPs ---
+
+# EIP para Master
+resource "aws_eip" "k3s_master_eip" {
   domain = "vpc"
-  tags = { Name = "${var.project_name}-k3s-eip" }
+  tags = { Name = "${var.project_name}-k3s-master-eip" }
 }
 
-# EC2 Instance (Subnet Pública para permitir SSH direto)
-resource "aws_instance" "k3s_node" {
+# EIP para Worker
+resource "aws_eip" "k3s_worker_eip" {
+  domain = "vpc"
+  tags = { Name = "${var.project_name}-k3s-worker-eip" }
+}
+
+# --- EC2 INSTANCE: K3S MASTER (t3.small - Control Plane Only) ---
+
+resource "aws_instance" "k3s_master" {
   ami                  = data.aws_ami.ubuntu.id
-  instance_type        = var.instance_type
+  instance_type        = "t3.small"  # Leve: apenas control plane + 1 serviço Go
   key_name             = aws_key_pair.budget_key.key_name
   subnet_id            = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
-  vpc_security_group_ids = [aws_security_group.k3s_sg.id]
+  vpc_security_group_ids = [aws_security_group.k3s_cluster_sg.id]
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
 
   root_block_device {
@@ -273,7 +297,7 @@ resource "aws_instance" "k3s_node" {
     volume_type = "gp2"
   }
 
-  user_data = base64encode(templatefile("${path.module}/scripts/user_data.sh.tpl", {
+  user_data = base64encode(templatefile("${path.module}/scripts/user_data_master.sh.tpl", {
     github_repo     = var.github_repo,
     github_token    = var.github_token,
     aws_region      = var.aws_region,
@@ -281,58 +305,134 @@ resource "aws_instance" "k3s_node" {
     db_name         = data.terraform_remote_state.database.outputs.db_instance_name,
     db_username     = data.terraform_remote_state.database.outputs.db_instance_username,
     db_password     = var.db_password,
-    instance_type   = var.instance_type,
-    public_ip       = aws_eip.k3s_eip.public_ip, # IP Injetado diretamente
+    public_ip       = aws_eip.k3s_master_eip.public_ip,
     scripts_version = var.scripts_version
   }))
 
-  tags = { Name = "${var.project_name}-k3s-node" }
+  tags = {
+    Name = "${var.project_name}-k3s-master"
+    Role = "master"
+  }
 }
 
-resource "aws_eip_association" "eip_assoc" {
-  instance_id   = aws_instance.k3s_node.id
-  allocation_id = aws_eip.k3s_eip.id
+resource "aws_eip_association" "master_eip_assoc" {
+  instance_id   = aws_instance.k3s_master.id
+  allocation_id = aws_eip.k3s_master_eip.id
 }
+
+# --- EC2 INSTANCE: K3S WORKER (t3.medium - All Workloads) ---
+
+resource "aws_instance" "k3s_worker" {
+  ami                  = data.aws_ami.ubuntu.id
+  instance_type        = "m7i-flex.large"  # 8GB RAM: Ideal para todos os 7 serviços!
+  key_name             = aws_key_pair.budget_key.key_name
+  subnet_id            = data.terraform_remote_state.network.outputs.public_subnet_ids[1]
+  vpc_security_group_ids = [aws_security_group.k3s_cluster_sg.id]
+  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp2"
+  }
+
+  user_data = base64encode(templatefile("${path.module}/scripts/user_data_worker.sh.tpl", {
+    master_private_ip = aws_instance.k3s_master.private_ip,
+    aws_region        = var.aws_region,
+    public_ip         = aws_eip.k3s_worker_eip.public_ip,
+    scripts_version   = var.scripts_version
+  }))
+
+  tags = {
+    Name = "${var.project_name}-k3s-worker"
+    Role = "worker"
+  }
+
+  depends_on = [aws_instance.k3s_master]
+}
+
+resource "aws_eip_association" "worker_eip_assoc" {
+  instance_id   = aws_instance.k3s_worker.id
+  allocation_id = aws_eip.k3s_worker_eip.id
+}
+
+# --- NULL RESOURCE: COPIAR TOKEN DO MASTER E CONFIGURAR WORKER ---
+
+resource "null_resource" "configure_worker" {
+  depends_on = [
+    aws_instance.k3s_master,
+    aws_instance.k3s_worker,
+    aws_eip_association.master_eip_assoc,
+    aws_eip_association.worker_eip_assoc
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command = <<EOT
+      echo "⏳ Aguardando K3s Master estar pronto (120s)..."
+      sleep 120
+
+      echo "📥 Obtendo token do K3s Master..."
+      K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_master_eip.public_ip} \
+        'sudo cat /var/lib/rancher/k3s/server/node-token' 2>/dev/null)
+
+      if [ -z "$K3S_TOKEN" ]; then
+        echo "❌ Erro: Não foi possível obter o token do Master"
+        exit 1
+      fi
+
+      echo "✅ Token obtido: $${K3S_TOKEN:0:20}..."
+
+      echo "🔗 Configurando Worker para conectar ao Master..."
+      ssh -o StrictHostKeyChecking=no -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_worker_eip.public_ip} << 'WORKER_EOF'
+        # Aguardar cloud-init finalizar
+        cloud-init status --wait || true
+
+        # Instalar K3s agent
+        echo "📦 Instalando K3s agent..."
+        curl -sfL https://get.k3s.io | K3S_URL=https://${aws_instance.k3s_master.private_ip}:6443 \
+          K3S_TOKEN="$K3S_TOKEN" \
+          INSTALL_K3S_EXEC="agent" \
+          sh -
+
+        echo "✅ K3s agent instalado"
+WORKER_EOF
+
+      echo "✅ Worker configurado com sucesso!"
+    EOT
+  }
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+}
+
+# --- NULL RESOURCE: OBTER KUBECONFIG ---
 
 resource "null_resource" "get_kubeconfig" {
-  depends_on = [aws_instance.k3s_node, aws_eip_association.eip_assoc]
+  depends_on = [null_resource.configure_worker]
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command = <<EOT
       mkdir -p ~/.kube
-      echo "Aguardando user_data finalizar e criar kubeconfig..."
+      echo "📥 Copiando kubeconfig do Master..."
 
-      # 1. Copiar o arquivo kubeconfig
-      for i in {1..60}; do
-        if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ${var.ssh_private_key_path} ubuntu@${aws_eip.k3s_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config; then
-          echo "Kubeconfig copiado com sucesso na tentativa $i!"
-          # Substituir 127.0.0.1 pelo IP Público da instância
-          sed -i 's/127.0.0.1/${aws_eip.k3s_eip.public_ip}/g' ~/.kube/config
+      for i in {1..30}; do
+        if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ${var.ssh_private_key_path} \
+            ubuntu@${aws_eip.k3s_master_eip.public_ip}:/home/ubuntu/.kube/config ~/.kube/config; then
+          echo "✅ Kubeconfig copiado na tentativa $i!"
+
+          # Substituir 127.0.0.1 pelo IP Público do Master
+          sed -i 's/127.0.0.1/${aws_eip.k3s_master_eip.public_ip}/g' ~/.kube/config
+
+          echo "🔍 Verificando nodes do cluster..."
+          kubectl get nodes
+
           break
         fi
-        echo "Tentativa SCP $i falhou. Aguardando 10s..."
+        echo "Tentativa $i falhou. Aguardando 10s..."
         sleep 10
       done
-
-      if [ ! -f ~/.kube/config ]; then
-        echo "timeout: Falha ao copiar kubeconfig após 60 tentativas."
-        exit 1
-      fi
-
-      # 2. Verificar conectividade com a porta da API (6443) antes de prosseguir
-      echo "Verificando conectividade com K3s API em ${aws_eip.k3s_eip.public_ip}:6443..."
-      for i in {1..30}; do
-        if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${aws_eip.k3s_eip.public_ip}/6443"; then
-          echo "Porta 6443 acessível!"
-          exit 0
-        fi
-        echo "Porta 6443 inacessível (tentativa $i/30). Aguardando 10s..."
-        sleep 10
-      done
-
-      echo "timeout: Falha ao conectar na porta 6443 do K3s."
-      exit 1
     EOT
   }
 

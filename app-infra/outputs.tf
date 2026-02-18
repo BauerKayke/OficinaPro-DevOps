@@ -1,12 +1,40 @@
-output "k3s_host_public_ip" {
-  description = "IP Público da instância EC2 rodando K3s"
-  value       = aws_eip.k3s_eip.public_ip
+# Outputs para a infraestrutura com 2 nodes K3s
+
+# --- MASTER OUTPUTS ---
+
+output "k3s_master_public_ip" {
+  description = "IP Público do K3s Master"
+  value       = aws_eip.k3s_master_eip.public_ip
 }
 
-output "k3s_host_id" {
-  description = "ID da instância EC2"
-  value       = aws_instance.k3s_node.id
+output "k3s_master_private_ip" {
+  description = "IP Privado do K3s Master"
+  value       = aws_instance.k3s_master.private_ip
 }
+
+output "k3s_master_id" {
+  description = "ID da instância EC2 Master"
+  value       = aws_instance.k3s_master.id
+}
+
+# --- WORKER OUTPUTS ---
+
+output "k3s_worker_public_ip" {
+  description = "IP Público do K3s Worker"
+  value       = aws_eip.k3s_worker_eip.public_ip
+}
+
+output "k3s_worker_private_ip" {
+  description = "IP Privado do K3s Worker"
+  value       = aws_instance.k3s_worker.private_ip
+}
+
+output "k3s_worker_id" {
+  description = "ID da instância EC2 Worker"
+  value       = aws_instance.k3s_worker.id
+}
+
+# --- ALB OUTPUTS ---
 
 output "alb_dns_name" {
   description = "DNS do Application Load Balancer"
@@ -18,17 +46,57 @@ output "alb_listener_arn" {
   value       = aws_lb_listener.http.arn
 }
 
-output "ssm_connect_command" {
-  description = "Comando para conectar via Systems Manager (fallback SSH)"
-  value       = "aws ssm start-session --target ${aws_instance.k3s_node.id} --region ${var.aws_region}"
-}
+# --- CLUSTER OUTPUTS ---
 
-output "ssh_test_command" {
-  description = "Comando para testar conectividade SSH"
-  value       = "timeout 10 bash -c 'cat < /dev/null > /dev/tcp/${aws_eip.k3s_eip.public_ip}/22' && echo '✅ SSH OK' || echo '❌ SSH FALHOU'"
+output "cluster_api_endpoint" {
+  description = "Endpoint da API do K3s Cluster (Master)"
+  value       = "https://${aws_eip.k3s_master_eip.public_ip}:6443"
 }
 
 output "security_group_id" {
-  description = "ID do Security Group do K3s"
-  value       = aws_security_group.k3s_sg.id
+  description = "ID do Security Group do K3s Cluster"
+  value       = aws_security_group.k3s_cluster_sg.id
+}
+
+# --- SSH COMMANDS ---
+
+output "ssh_master_command" {
+  description = "Comando SSH para conectar ao Master"
+  value       = "ssh -i ~/.ssh/chave_nova.pem ubuntu@${aws_eip.k3s_master_eip.public_ip}"
+}
+
+output "ssh_worker_command" {
+  description = "Comando SSH para conectar ao Worker"
+  value       = "ssh -i ~/.ssh/chave_nova.pem ubuntu@${aws_eip.k3s_worker_eip.public_ip}"
+}
+
+# --- SSM COMMANDS ---
+
+output "ssm_master_command" {
+  description = "Comando para conectar ao Master via Systems Manager"
+  value       = "aws ssm start-session --target ${aws_instance.k3s_master.id} --region ${var.aws_region}"
+}
+
+output "ssm_worker_command" {
+  description = "Comando para conectar ao Worker via Systems Manager"
+  value       = "aws ssm start-session --target ${aws_instance.k3s_worker.id} --region ${var.aws_region}"
+}
+
+# --- CLUSTER STATUS COMMANDS ---
+
+output "check_nodes_command" {
+  description = "Comando para verificar status dos nodes no cluster"
+  value       = "kubectl get nodes -o wide"
+}
+
+output "check_pods_command" {
+  description = "Comando para verificar pods em todos os nodes"
+  value       = "kubectl get pods -n oficinapro-prod -o wide"
+}
+
+# --- CUSTO ESTIMADO ---
+
+output "monthly_cost_estimate" {
+  description = "Custo mensal estimado da infraestrutura (2x t3.small)"
+  value       = "2x t3.small = $30.37/mês ($15.18 cada)"
 }
