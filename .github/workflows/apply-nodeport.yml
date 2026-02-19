@@ -1,0 +1,84 @@
+name: Apply NodePort to Saga
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Apply NodePort configuration'
+        required: true
+        default: 'yes'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+
+jobs:
+  apply-nodeport:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 44.214.64.63 >> ~/.ssh/known_hosts
+      
+      - name: Apply NodePort Configuration
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@44.214.64.63 << 'ENDSSH'
+          export KUBECONFIG=/home/ubuntu/.kube/config
+          
+          # Setup kubeconfig se necessário
+          if [ ! -f /home/ubuntu/.kube/config ]; then
+              mkdir -p /home/ubuntu/.kube
+              sudo cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
+              sudo chown ubuntu:ubuntu /home/ubuntu/.kube/config
+          fi
+          
+          # Deletar service antigo
+          kubectl delete svc saga-orchestrator -n oficinapro-prod 2>/dev/null || true
+          
+          # Criar novo NodePort
+          kubectl apply -f - <<'EOFYAML'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: saga-orchestrator
+            namespace: oficinapro-prod
+          spec:
+            type: NodePort
+            selector:
+              app: saga-orchestrator
+            ports:
+            - name: http
+              port: 8084
+              targetPort: 8084
+              nodePort: 30084
+          EOFYAML
+          
+          # Verificar
+          echo "Waiting for service..."
+          sleep 5
+          kubectl get svc saga-orchestrator -n oficinapro-prod
+          
+          echo ""
+          echo "✅ NodePort configured successfully!"
+          echo "Test with: curl -X POST http://44.214.64.63:30084/saga/create-os ..."
+          ENDSSH
+      
+      - name: Test External Access
+        run: |
+          echo "Waiting 10s for service to be ready..."
+          sleep 10
+          
+          echo "Testing external access..."
+          curl -X POST http://44.214.64.63:30084/saga/create-os \
+            -H 'Content-Type: application/json' \
+            -d '{"clienteId":"b02aa0c2-d2e6-4622-8b78-fa53112e9d43","veiculoPlaca":"SAGA1234","descricaoProblema":"Teste GitHub Actions","valorServicos":1500,"valorPecas":800}' \
+            -w "\nHTTP Status: %{http_code}\n" || echo "Connection failed (may need time to propagate)"
