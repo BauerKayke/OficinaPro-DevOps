@@ -32,6 +32,17 @@ data "aws_subnets" "lambda_subnets" {
   }
 }
 
+# Subnets públicas para o VPC Link (onde o ALB está)
+data "aws_subnets" "public_subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.existing_vpc.id]
+  }
+  tags = {
+    Name = "${var.project_name}-budget-public-subnet*"
+  }
+}
+
 # Ler estado do DATABASE (RDS)
 data "terraform_remote_state" "database" {
   backend = "s3"
@@ -285,7 +296,7 @@ resource "aws_lambda_permission" "api_gw_authorizer" {
 resource "aws_apigatewayv2_vpc_link" "alb_link" {
   name               = "oficinapro-alb-link"
   security_group_ids = [aws_security_group.lambda_sg.id]
-  subnet_ids         = data.aws_subnets.lambda_subnets.ids
+  subnet_ids         = data.aws_subnets.public_subnets.ids  # Mesmas subnets do ALB
 
   tags = {
     Name = "${var.project_name}-alb-vpc-link"
@@ -297,8 +308,8 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   integration_type   = "HTTP_PROXY"
   integration_method = "ANY"
 
-  # Pega o ARN do Listener do ALB do output do módulo app-infra
-  # Necessário para integração via VPC Link
+  # Para VPC Link com ALB interno, usa ARN do Listener
+  # VPC Link conecta diretamente ao listener via ARN
   integration_uri = data.terraform_remote_state.app_infra.outputs.alb_listener_arn
 
   request_parameters = {
@@ -308,6 +319,10 @@ resource "aws_apigatewayv2_integration" "app_http_proxy" {
   connection_type = "VPC_LINK"
   connection_id   = aws_apigatewayv2_vpc_link.alb_link.id
   description     = "Proxy para o App Java no K3s"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # --- ROTAS PÚBLICAS DO APP JAVA (LINKS DE EMAIL) ---
@@ -345,6 +360,10 @@ resource "aws_apigatewayv2_route" "app_route" {
   # Aqui ligamos a proteção
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth_lambda_authorizer.id
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # --- OUTPUTS ---

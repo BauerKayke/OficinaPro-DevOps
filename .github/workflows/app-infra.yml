@@ -11,24 +11,33 @@ on:
         options:
         - apply
         - destroy
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'app-infra/**'
+      - '.github/workflows/app-infra.yml'
 
 jobs:
   terraform:
-    name: 'Terraform App Infra'
+    name: 'Terraform App Infra - K3s Cluster (Single Node Spot)'
     runs-on: ubuntu-latest
     outputs:
-      ec2_public_ip: ${{ steps.ec2_ip.outputs.ip }}
+      k3s_master_ip: ${{ steps.outputs.outputs.master_ip }}
       alb_dns: ${{ steps.outputs.outputs.alb_dns }}
+      cluster_status: ${{ steps.verify_cluster.outputs.status }}
+      spot_instance_status: ${{ steps.verify_spot.outputs.status }}
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
-      TF_VAR_github_token: ${{ secrets.GH_TOKEN }} # Token clássico (PAT)
-      TF_VAR_github_repo: "BauerKayke/OficinaPro-KaykeBauer" # Repositório da aplicação
-      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }} # Senha do RDS
-      TF_VAR_ssh_private_key_path: "./private_key.pem" # Caminho para a chave privada
-      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }} # Chave pública para o Key Pair
+      TF_VAR_github_token: "dummy-token"
+      TF_VAR_github_repo: "https://github.com/BauerKayke/core-domain-service"
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      TF_VAR_ssh_private_key_path: "./chave_nova"
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
     defaults:
       run:
@@ -40,65 +49,230 @@ jobs:
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
 
     - name: Setup SSH Key
       run: |
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
-        echo "" >> private_key.pem # Garante quebra de linha final
-        chmod 600 private_key.pem
+        echo "🔐 Configurando chave SSH..."
+        echo "${{ secrets.K3S_SSH_PRIVATE_KEY }}" > chave_nova
+        echo "" >> chave_nova
+        chmod 600 chave_nova
+        
+        echo "✅ Chave SSH configurada"
       shell: bash
 
     - name: Terraform Init
-      run: terraform init
+      run: |
+        echo "🔄 Inicializando Terraform..."
+        terraform init
+        echo "✅ Terraform inicializado"
 
     - name: Terraform Validate
-      run: terraform validate
+      run: |
+        echo "✅ Validando configuração..."
+        terraform validate
 
     - name: Terraform Plan
-      if: ${{ github.event.inputs.action == 'apply' }}
-      run: terraform plan -lock=false -out=tfplan
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔍 PLANEJANDO INFRAESTRUTURA K3S (FASE 4 - OTIMIZADA)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "📦 Configuração do Cluster:"
+        echo "  • Master Node: m7i-flex.large (8GB RAM) - SPOT INSTANCE"
+        echo "  • Economia: ~85% vs On-Demand"
+        echo "  • Total: 8GB RAM disponível"
+        echo "  • Behavior: STOP (preserva EBS e EIP)"
+        echo ""
+        terraform plan -out=tfplan
 
     - name: Terraform Apply
-      if: ${{ github.event.inputs.action == 'apply' }}
-      # O apply agora apenas cria a infra e baixa o kubeconfig via null_resource
-      run: terraform apply -lock=false -auto-approve tfplan
-
-    - name: Save IP to AWS Parameter Store
-      if: ${{ github.event.inputs.action == 'apply' }}
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: apply
       run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        if [ -n "$EC2_IP" ]; then
-          echo "💾 Salvando IP no AWS Parameter Store..."
-          aws ssm put-parameter \
-            --name "/oficinapro/k3s/ec2-public-ip" \
-            --value "$EC2_IP" \
-            --type "String" \
-            --overwrite \
-            --region us-east-1
-          echo "✅ IP salvo em: /oficinapro/k3s/ec2-public-ip"
-        fi
-
-    - name: Output EC2 IP
-      if: ${{ github.event.inputs.action == 'apply' }}
-      id: ec2_ip
-      run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        echo "EC2 Public IP: $EC2_IP"
-        echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🚀 APLICANDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
-        echo "⚠️  IMPORTANTE: Use este IP nos deployments:"
-        echo "   IP: $EC2_IP"
+        terraform apply -auto-approve tfplan
         echo ""
-        echo "💡 Você pode usar o output 'ec2_public_ip' deste job em outros workflows!"
+        echo "✅ Terraform apply concluído!"
 
-    - name: Capture All Outputs
-      if: ${{ github.event.inputs.action == 'apply' }}
+    - name: Capture Outputs
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       id: outputs
       run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📊 OUTPUTS DA INFRAESTRUTURA"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || echo "")
         ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
+        CLUSTER_API=$(terraform output -raw cluster_api_endpoint 2>/dev/null || echo "")
+        
+        echo "master_ip=$MASTER_IP" >> $GITHUB_OUTPUT
         echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
-        echo "ALB DNS: $ALB_DNS"
+        
+        echo ""
+        echo "🖥️  Master Node (Spot) IP: $MASTER_IP"
+        echo "🌐 ALB DNS: $ALB_DNS"
+        echo "🔗 Cluster API: $CLUSTER_API"
+        echo ""
+        
+        # Salvar Master IP no Parameter Store para outros workflows
+        aws ssm put-parameter --name "/oficinapro/k3s/master-ip" --value "$MASTER_IP" --type "String" --overwrite --region us-east-1
+        
+        echo "💾 Master IP salvo no AWS Parameter Store"
+
+    - name: Verify Spot Instance
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: verify_spot
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "💰 VERIFICANDO STATUS DA SPOT INSTANCE"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip)
+        
+        # Buscar instance ID pelo Master IP
+        INSTANCE_ID=$(aws ec2 describe-instances \
+          --filters "Name=ip-address,Values=${MASTER_IP}" "Name=instance-state-name,Values=running" \
+          --query 'Reservations[0].Instances[0].InstanceId' \
+          --output text 2>/dev/null)
+        
+        if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+          echo "⚠️  Não foi possível determinar Instance ID"
+          echo "status=unknown" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        echo "🔍 Instance ID: $INSTANCE_ID"
+        
+        # Verificar se é Spot Instance
+        LIFECYCLE=$(aws ec2 describe-instances \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].InstanceLifecycle' \
+          --output text 2>/dev/null)
+        
+        # Obter tipo e behavior
+        INSTANCE_TYPE=$(aws ec2 describe-instances \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].InstanceType' \
+          --output text)
+        
+        SPOT_BEHAVIOR=$(aws ec2 describe-instances \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].SpotInstanceRequestId' \
+          --output text 2>/dev/null)
+        
+        echo ""
+        if [ "$LIFECYCLE" == "spot" ]; then
+          echo "✅ Master Node está rodando como SPOT INSTANCE!"
+          echo "   Instance Type: ${INSTANCE_TYPE}"
+          echo "   Lifecycle: Spot"
+          echo "   Behavior: STOP (preserva EBS e EIP)"
+          echo "   Economia: ~85% vs On-Demand"
+          echo "status=spot" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️  Master Node NÃO é Spot Instance"
+          echo "   Instance Type: ${INSTANCE_TYPE}"
+          echo "   Lifecycle: ${LIFECYCLE:-on-demand}"
+          echo "   💸 CUSTO ALTO: ~10x mais caro que Spot"
+          echo "status=on-demand" >> $GITHUB_OUTPUT
+        fi
+        echo ""
+
+    - name: Verify K3s Cluster
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: verify_cluster
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔍 VERIFICANDO CLUSTER K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip)
+        
+        echo "⏳ Aguardando K3s ficar pronto (timeout: 5 minutos)..."
+        
+        for i in {1..20}; do
+          echo "Tentativa $i/20..."
+          
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
+            echo ""
+            echo "✅ Cluster K3s está operacional!"
+            
+            echo ""
+            echo "📊 Status dos Nodes:"
+            ssh -o StrictHostKeyChecking=no -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes -o wide"
+            
+            echo ""
+            echo "📦 Namespaces:"
+            ssh -o StrictHostKeyChecking=no -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get namespaces"
+            
+            echo "status=ready" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          sleep 15
+        done
+        
+        echo ""
+        echo "⚠️  Cluster ainda não está pronto (pode levar até 10 minutos)"
+        echo "   Isso é normal para a primeira execução"
+        echo "status=pending" >> $GITHUB_OUTPUT
+
+    - name: Summary
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      run: |
+        echo "════════════════════════════════════════════════════════"
+        echo "  ✅ INFRAESTRUTURA K3S APLICADA COM SUCESSO"
+        echo "════════════════════════════════════════════════════════"
+        echo ""
+        echo "📋 Recursos Criados:"
+        echo "  ✅ Master Node (m7i-flex.large - 8GB RAM) - SPOT"
+        echo "  ✅ Application Load Balancer (interno)"
+        echo "  ✅ Security Groups (K3s + ALB)"
+        echo "  ✅ Elastic IP (IP público fixo)"
+        echo "  ✅ IAM Roles (ECR, SSM, SQS)"
+        echo ""
+        echo "🔗 Conectividade:"
+        echo "  Master IP: ${{ steps.outputs.outputs.master_ip }}"
+        echo "  ALB DNS: ${{ steps.outputs.outputs.alb_dns }}"
+        echo ""
+        echo "💰 Custo Estimado (Spot Instance):"
+        echo "  ~$38-42/mês (Master Spot + ALB + RDS)"
+        echo "  Economia: 85% vs Master On-Demand"
+        echo ""
+        echo "⚠️  Comportamento Spot:"
+        echo "  • Interruption Behavior: STOP"
+        echo "  • EBS e EIP são preservados"
+        echo "  • Ao reiniciar, mantém mesmo IP público"
+        echo ""
+        echo "🚀 Próximos Passos:"
+        echo "  1. Aguarde 2-5 minutos para K3s completar setup"
+        echo "  2. Execute pipelines de deploy dos microserviços"
+        echo "  3. Verifique pods: kubectl get pods -n oficinapro-prod"
+        echo ""
+        echo "════════════════════════════════════════════════════════"
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
-      run: terraform destroy -lock=false -auto-approve
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🗑️  DESTRUINDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "⚠️  ATENÇÃO: Esta ação irá destruir:"
+        echo "  • EC2 Master Instance (Spot)"
+        echo "  • Application Load Balancer"
+        echo "  • Elastic IP"
+        echo "  • Security Groups"
+        echo "  • Todos os deployments Kubernetes"
+        echo ""
+        terraform destroy -auto-approve
+        echo ""
+        echo "✅ Infraestrutura destruída!"

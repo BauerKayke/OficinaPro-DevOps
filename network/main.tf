@@ -69,22 +69,24 @@ resource "aws_subnet" "private_subnet_2" {
   tags = { Name = "${var.project_name}-budget-private-subnet-2" }
 }
 
-# --- NAT GATEWAY ---
+# --- NAT GATEWAY - REMOVIDO (VPC budget nao esta em uso) ---
+# A VPC budget (vpc-0c5cb569520a7687d) nao tem recursos ativos
+# Todos os recursos estao na VPC fase4 com NAT Instance
 
-# Elastic IP para o NAT Gateway
-resource "aws_eip" "nat_eip" {
-  domain = "vpc"
-  tags = { Name = "${var.project_name}-nat-eip" }
-}
-
-# NAT Gateway (na Subnet Pública 1)
-resource "aws_nat_gateway" "nat_gw" {
-  allocation_id = aws_eip.nat_eip.id
-  subnet_id     = aws_subnet.public_subnet_1.id
-  tags = { Name = "${var.project_name}-nat-gw" }
-
-  depends_on = [aws_internet_gateway.igw]
-}
+# # Elastic IP para o NAT Gateway
+# resource "aws_eip" "nat_eip" {
+#   domain = "vpc"
+#   tags = { Name = "${var.project_name}-nat-eip" }
+# }
+#
+# # NAT Gateway (na Subnet Pública 1)
+# resource "aws_nat_gateway" "nat_gw" {
+#   allocation_id = aws_eip.nat_eip.id
+#   subnet_id     = aws_subnet.public_subnet_1.id
+#   tags = { Name = "${var.project_name}-nat-gw" }
+#
+#   depends_on = [aws_internet_gateway.igw]
+# }
 
 # --- ROUTE TABLES ---
 
@@ -98,15 +100,16 @@ resource "aws_route_table" "public_rt" {
   tags = { Name = "${var.project_name}-budget-public-rt" }
 }
 
-# Tabela Privada (via NAT Gateway)
-resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.main_vpc.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat_gw.id
-  }
-  tags = { Name = "${var.project_name}-budget-private-rt" }
-}
+# Tabela Privada - COMENTADA (NAT Gateway removido)
+# Esta VPC (budget) nao tem recursos ativos
+# resource "aws_route_table" "private_rt" {
+#   vpc_id = aws_vpc.main_vpc.id
+#   route {
+#     cidr_block     = "0.0.0.0/0"
+#     nat_gateway_id = aws_nat_gateway.nat_gw.id
+#   }
+#   tags = { Name = "${var.project_name}-budget-private-rt" }
+# }
 
 # --- ASSOCIAÇÕES ---
 
@@ -120,15 +123,16 @@ resource "aws_route_table_association" "public_rta_2" {
   route_table_id = aws_route_table.public_rt.id
 }
 
-resource "aws_route_table_association" "private_rta_1" {
-  subnet_id      = aws_subnet.private_subnet_1.id
-  route_table_id = aws_route_table.private_rt.id
-}
-
-resource "aws_route_table_association" "private_rta_2" {
-  subnet_id      = aws_subnet.private_subnet_2.id
-  route_table_id = aws_route_table.private_rt.id
-}
+# Route Table Associations - COMENTADAS (NAT Gateway removido, VPC nao usada)
+# resource "aws_route_table_association" "private_rta_1" {
+#   subnet_id      = aws_subnet.private_subnet_1.id
+#   route_table_id = aws_route_table.private_rt.id
+# }
+#
+# resource "aws_route_table_association" "private_rta_2" {
+#   subnet_id      = aws_subnet.private_subnet_2.id
+#   route_table_id = aws_route_table.private_rt.id
+# }
 
 # --- NETWORK ACLs (CRITICAL: Permite SSH e tráfego necessário) ---
 
