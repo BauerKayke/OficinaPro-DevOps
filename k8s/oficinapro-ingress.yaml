@@ -1,0 +1,66 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oficinapro-ingress
+  namespace: oficinapro-prod
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      # Customer Service
+      - path: /api/v1/customers
+        pathType: Prefix
+        backend:
+          service:
+            name: customer-service
+            port:
+              number: 8082
+      
+      # Billing Service
+      - path: /api/v1/billings
+        pathType: Prefix
+        backend:
+          service:
+            name: billing-service
+            port:
+              number: 8081
+      
+      # Execution Service
+      - path: /api/v1/executions
+        pathType: Prefix
+        backend:
+          service:
+            name: execution-service
+            port:
+              number: 8083
+      
+      # Payment Service
+      - path: /api/v1/payments
+        pathType: Prefix
+        backend:
+          service:
+            name: payment-service
+            port:
+              number: 8000
+      
+      # Saga Orchestrator
+      - path: /api/v1/saga
+        pathType: Prefix
+        backend:
+          service:
+            name: saga-orchestrator
+            port:
+              number: 8084
+      
+      # Core Domain (Ordem de Serviço) - SEM /api/v1 pois já está no context-path
+      - path: /ordem-servico
+        pathType: Prefix
+        backend:
+          service:
+            name: core-domain-service
+            port:
+              number: 8080

@@ -96,15 +96,15 @@ resource "aws_lb" "app_alb" {
   tags = { Name = "${var.project_name}-alb" }
 }
 
-# Target Group (Aponta para EC2 na porta 80 - Nginx HostNetwork)
+# Target Group (Aponta para EC2 na porta 31416 - Nginx Ingress NodePort)
 resource "aws_lb_target_group" "app_tg" {
   name     = "${var.project_name}-tg"
-  port     = 80
+  port     = 31416  # ← CORRIGIDO: NodePort do Nginx Ingress (antes era 80)
   protocol = "HTTP"
   vpc_id   = data.terraform_remote_state.network.outputs.vpc_id
 
   health_check {
-    path                = "/api/v1/actuator/health"
+    path                = "/api/v1/customers"  # ← CORRIGIDO: endpoint válido no Ingress
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
@@ -127,11 +127,11 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Associação das instâncias ao Target Group (ambas)
+# Associação das instâncias ao Target Group (master)
 resource "aws_lb_target_group_attachment" "master_attach" {
   target_group_arn = aws_lb_target_group.app_tg.arn
   target_id        = aws_instance.k3s_master.id
-  port             = 80
+  port             = 31416  # ← CORRIGIDO: NodePort do Nginx Ingress (antes era 80)
 }
 
 # --- IAM ROLE E INSTANCE PROFILE PARA EC2 (SSM + ECR) ---
@@ -258,6 +258,28 @@ resource "aws_security_group_rule" "ingress_https_from_alb" {
   source_security_group_id = aws_security_group.alb_sg.id
   security_group_id        = aws_security_group.k3s_cluster_sg.id
   description              = "HTTPS apenas via ALB"
+}
+
+# Regra: NodePort 31416 (Nginx Ingress HTTP) APENAS do ALB
+resource "aws_security_group_rule" "ingress_nodeport_http_from_alb" {
+  type                     = "ingress"
+  from_port                = 31416
+  to_port                  = 31416
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_sg.id
+  security_group_id        = aws_security_group.k3s_cluster_sg.id
+  description              = "Nginx Ingress NodePort HTTP apenas via ALB"
+}
+
+# Regra: NodePort 31845 (Nginx Ingress HTTPS) APENAS do ALB
+resource "aws_security_group_rule" "ingress_nodeport_https_from_alb" {
+  type                     = "ingress"
+  from_port                = 31845
+  to_port                  = 31845
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb_sg.id
+  security_group_id        = aws_security_group.k3s_cluster_sg.id
+  description              = "Nginx Ingress NodePort HTTPS apenas via ALB"
 }
 
 # Regra: Comunicação Interna K3s (self) - Todas as portas

@@ -1,0 +1,101 @@
+---
+# ConfigMap para Core Domain Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: core-domain-otel-config
+  namespace: oficinapro
+data:
+  OTEL_SERVICE_NAME: "oficinapro-core-domain-service"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp.nr-data.net"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "otlp"
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  SPRING_PROFILES_ACTIVE: "production"
+
+---
+# ConfigMap para Billing Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: billing-otel-config
+  namespace: oficinapro
+data:
+  OTEL_SERVICE_NAME: "oficinapro-billing-service"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp.nr-data.net"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "otlp"
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  SPRING_PROFILES_ACTIVE: "production"
+
+---
+# ConfigMap para Customer Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: customer-otel-config
+  namespace: oficinapro
+data:
+  OTEL_SERVICE_NAME: "oficinapro-customer-service"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp.nr-data.net"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "otlp"
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  SPRING_PROFILES_ACTIVE: "production"
+
+---
+# ConfigMap para Execution Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: execution-otel-config
+  namespace: oficinapro
+data:
+  OTEL_SERVICE_NAME: "oficinapro-execution-service"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp.nr-data.net"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "otlp"
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  SPRING_PROFILES_ACTIVE: "production"
+
+---
+# ConfigMap para Saga Orchestrator
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: saga-otel-config
+  namespace: oficinapro
+data:
+  OTEL_SERVICE_NAME: "oficinapro-saga-orchestrator"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp.nr-data.net"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "otlp"
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  SPRING_PROFILES_ACTIVE: "production"
+
+---
+# ConfigMap para Payment API (Python)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-otel-config
+  namespace: oficinapro
+data:
+  OTEL_SERVICE_NAME: "oficinapro-payment-service"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp.nr-data.net"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "otlp"
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
