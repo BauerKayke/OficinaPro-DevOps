@@ -42,7 +42,7 @@ jobs:
           echo "✅ Master IP: ${MASTER_IP}"
           echo "✅ RDS Host: ${RDS_ENDPOINT}"
 
-      - name: 'Executar Script de Criação via SSH'
+      - name: 'Executar Script via K3s (Pod Temporário)'
         uses: appleboy/ssh-action@master
         with:
           host: ${{ steps.infra.outputs.master_ip }}
@@ -50,27 +50,27 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: DB_PASSWORD
           script: |
-            # Instalar cliente postgres se não tiver
-            if ! command -v psql &> /dev/null; then
-                sudo apt-get update && sudo apt-get install -y postgresql-client
-            fi
-            
             DB_HOST="${{ steps.infra.outputs.rds_host }}"
             DB_USER="oficinapro_admin"
             export PGPASSWORD="${DB_PASSWORD}"
             
-            echo "🚀 Iniciando criação de bancos de dados em $DB_HOST..."
+            echo "🚀 Iniciando criação de bancos de dados via Pod Temporário..."
             
-            # Lista de bancos para criar
-            DATABASES=("customer_db" "billing_db" "execution_db" "saga_db" "payment_db")
+            # Criar script SQL
+            cat <<EOF > /tmp/init-db.sql
+            SELECT 'CREATE DATABASE customer_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'customer_db')\gexec
+            SELECT 'CREATE DATABASE billing_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'billing_db')\gexec
+            SELECT 'CREATE DATABASE execution_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'execution_db')\gexec
+            SELECT 'CREATE DATABASE saga_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'saga_db')\gexec
+            SELECT 'CREATE DATABASE payment_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'payment_db')\gexec
+            EOF
             
-            for DB in "${DATABASES[@]}"; do
-                if psql -h $DB_HOST -U $DB_USER -lqt | cut -d \| -f 1 | grep -qw $DB; then
-                    echo "✅ Banco '$DB' já existe."
-                else
-                    echo "✨ Criando banco '$DB'..."
-                    psql -h $DB_HOST -U $DB_USER -d os_db -c "CREATE DATABASE $DB;"
-                fi
-            done
+            # Rodar Pod Postgres Alpine para executar o script
+            # Usa a imagem postgres:alpine que é leve e já tem psql
+            sudo kubectl run db-init-job --rm -i --restart=Never \
+              --image=postgres:15-alpine \
+              --env="PGPASSWORD=${DB_PASSWORD}" \
+              -- \
+              psql -h $DB_HOST -U $DB_USER -d os_db -f - < /tmp/init-db.sql
             
             echo "🏁 Inicialização de bancos concluída!"
