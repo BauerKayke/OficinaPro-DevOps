@@ -1,0 +1,76 @@
+name: 'OficinaPro - Database Initialization'
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["App Infra CI/CD"]
+    types:
+      - completed
+
+jobs:
+  init-databases:
+    name: 'Create Logical Databases'
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+
+      - name: 'Buscar Endpoints'
+        id: infra
+        run: |
+          echo "🔍 Buscando endpoints..."
+          
+          # Buscar IP do Master Node
+          MASTER_IP=$(aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text)
+          echo "master_ip=${MASTER_IP}" >> $GITHUB_OUTPUT
+          
+          # Buscar Endpoint do RDS
+          RDS_ENDPOINT=$(aws rds describe-db-instances \
+            --db-instance-identifier oficinapro-consolidated-db \
+            --query 'DBInstances[0].Endpoint.Address' \
+            --output text)
+          echo "rds_host=${RDS_ENDPOINT}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Master IP: ${MASTER_IP}"
+          echo "✅ RDS Host: ${RDS_ENDPOINT}"
+
+      - name: 'Executar Script de Criação via SSH'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ steps.infra.outputs.master_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DB_PASSWORD
+          script: |
+            # Instalar cliente postgres se não tiver
+            if ! command -v psql &> /dev/null; then
+                sudo apt-get update && sudo apt-get install -y postgresql-client
+            fi
+            
+            DB_HOST="${{ steps.infra.outputs.rds_host }}"
+            DB_USER="oficinapro_admin"
+            export PGPASSWORD="${DB_PASSWORD}"
+            
+            echo "🚀 Iniciando criação de bancos de dados em $DB_HOST..."
+            
+            # Lista de bancos para criar
+            DATABASES=("customer_db" "billing_db" "execution_db" "saga_db" "payment_db")
+            
+            for DB in "${DATABASES[@]}"; do
+                if psql -h $DB_HOST -U $DB_USER -lqt | cut -d \| -f 1 | grep -qw $DB; then
+                    echo "✅ Banco '$DB' já existe."
+                else
+                    echo "✨ Criando banco '$DB'..."
+                    psql -h $DB_HOST -U $DB_USER -d os_db -c "CREATE DATABASE $DB;"
+                fi
+            done
+            
+            echo "🏁 Inicialização de bancos concluída!"

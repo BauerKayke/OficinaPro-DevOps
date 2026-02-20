@@ -22,9 +22,25 @@ PUBLIC_IP="${public_ip}"
 apt-get update -y
 apt-get install -y apt-transport-https ca-certificates curl software-properties-common git jq unzip
 
-# Instalar dependências essenciais (removendo Docker que está quebrando o script)
-apt-get update -y
-apt-get install -y apt-transport-https ca-certificates curl software-properties-common git jq unzip
+# ====================================================================
+# GARANTIR QUE SSH PERMANECE ACESSÍVEL (CRÍTICO PARA CI/CD)
+# ====================================================================
+echo "Configurando firewall para garantir acesso SSH..."
+
+# Desabilitar ufw se estiver ativo (conflita com K3s)
+systemctl stop ufw || true
+systemctl disable ufw || true
+
+# Garantir que o SSH service está rodando e habilitado
+systemctl enable ssh
+systemctl start ssh
+systemctl status ssh
+
+# Verificar que a porta 22 está escutando
+ss -tlnp | grep :22 || echo "AVISO: SSH não está escutando na porta 22!"
+
+echo "SSH configurado e verificado."
+# ===================================================================="
 
 # Instalar K3s (versão otimizada) com TLS SAN para permitir acesso externo
 # Removido --docker para usar containerd (nativo e mais estável)
@@ -42,6 +58,20 @@ if ! systemctl is-active --quiet k3s; then
 fi
 
 echo "K3s instalado com sucesso."
+
+# ====================================================================
+# VERIFICAR NOVAMENTE QUE SSH AINDA ESTÁ ACESSÍVEL PÓS K3S
+# ====================================================================
+echo "Verificando acesso SSH pós-instalação do K3s..."
+systemctl status ssh
+ss -tlnp | grep :22 || echo "ERRO: SSH não está mais acessível!"
+
+# Se K3s modificou iptables, garantir que SSH continua permitido
+iptables -L INPUT -n | grep "dpt:22" || {
+    echo "Adicionando regra iptables para SSH..."
+    iptables -I INPUT -p tcp --dport 22 -j ACCEPT
+}
+# ===================================================================="
 
 # Aguardar o K3s ficar pronto
 sleep 30
@@ -80,12 +110,31 @@ curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip
 unzip awscliv2.zip
 ./aws/install
 
+# Instalar Kustomize (necessário para deploy.sh)
+echo "Instalando Kustomize..."
+curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+mv kustomize /usr/local/bin/
+chmod +x /usr/local/bin/kustomize
+
 # Clonar o repositório da aplicação
 # Usando variáveis do shell para evitar conflito com o Terraform
 git clone https://$GITHUB_TOKEN@github.com/$GITHUB_REPO.git /app
 
 # Navegar para o diretório de deploy e aplicar os manifestos Kubernetes
 cd /app/deployment/kubernetes
-./deploy.sh
+chmod +x deploy.sh
+
+# Exportar variáveis de ambiente necessárias para deploy.sh
+export SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD"
+export SPRING_DATA_REDIS_PASSWORD="redis-senha-dummy"  # Placeholder
+export JWT_SECRET="oficinapro-jwt-secret-key-2024"
+export JWT_EXPIRATION="86400000"  # 24 horas
+export SPRING_MAIL_PASSWORD="mail-senha-dummy"  # Placeholder
+export NEW_RELIC_LICENSE_KEY="dummy-license-key"  # Placeholder (será fornecido via CI/CD)
+export DB_HOST="$DB_HOST"
+export API_BASE_URL="https://example.com"  # Placeholder (será atualizado via CI/CD)
+
+# Executar deploy
+./deploy.sh dev apply
 
 echo "Bootstrap finalizado com sucesso."

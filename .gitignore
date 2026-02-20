@@ -1,0 +1,53 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Backups
+*.backup
+*.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scripts (temporários/locais)
+cleanup-*.sh
+destroy-*.sh
+
+# Logs
+*.log
+
+# SSH Keys (NUNCA commitar chaves privadas!)
+.keys/*.pem
+.keys/*_key
+*.pem
+*_rsa
+*_ed25519
+!*.pub
+
+# Terraform temporary files
+*.tfvars
+!terraform.tfvars.example
+tfplan*
+terraform-plan-output.txt
+*.backup
+*.worker-cleanup

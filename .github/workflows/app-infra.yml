@@ -11,28 +11,96 @@ on:
         options:
         - apply
         - destroy
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'fase4/04-compute/**'
+      - 'fase4-optimized/databases/**'
+      - 'fase4-optimized/messaging/**'
+      - '.github/workflows/app-infra.yml'
 
 jobs:
-  terraform:
-    name: 'Terraform App Infra'
+  databases:
+    name: '1. Terraform Databases (Optimized)'
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./fase4-optimized/databases
+
+    - name: Terraform Apply
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      run: terraform apply -auto-approve
+      working-directory: ./fase4-optimized/databases
+
+    - name: Terraform Destroy
+      if: ${{ github.event.inputs.action == 'destroy' }}
+      run: terraform destroy -auto-approve
+      working-directory: ./fase4-optimized/databases
+
+  messaging:
+    name: '2. Terraform Messaging (Optimized)'
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./fase4-optimized/messaging
+
+    - name: Terraform Apply
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      run: terraform apply -auto-approve
+      working-directory: ./fase4-optimized/messaging
+
+    - name: Terraform Destroy
+      if: ${{ github.event.inputs.action == 'destroy' }}
+      run: terraform destroy -auto-approve
+      working-directory: ./fase4-optimized/messaging
+
+  compute:
+    name: '3. Terraform Compute - K3s Cluster'
+    needs: [databases, messaging]
     runs-on: ubuntu-latest
     outputs:
-      ec2_public_ip: ${{ steps.ec2_ip.outputs.ip }}
+      k3s_master_ip: ${{ steps.outputs.outputs.master_ip }}
       alb_dns: ${{ steps.outputs.outputs.alb_dns }}
+      cluster_status: ${{ steps.verify_cluster.outputs.status }}
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
-      TF_VAR_github_token: ${{ secrets.GH_TOKEN }} # Token clássico (PAT)
-      TF_VAR_github_repo: "BauerKayke/OficinaPro-KaykeBauer" # Repositório da aplicação
-      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }} # Senha do RDS
-      TF_VAR_ssh_private_key_path: "./private_key.pem" # Caminho para a chave privada
-      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }} # Chave pública para o Key Pair
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
 
     defaults:
       run:
-        working-directory: ./app-infra
+        working-directory: ./fase4/04-compute
 
     steps:
     - name: Checkout
@@ -40,65 +108,105 @@ jobs:
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
-
-    - name: Setup SSH Key
-      run: |
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
-        echo "" >> private_key.pem # Garante quebra de linha final
-        chmod 600 private_key.pem
-      shell: bash
+      with:
+        terraform_version: 1.5.0
 
     - name: Terraform Init
-      run: terraform init
+      run: |
+        echo "🔄 Inicializando Terraform..."
+        terraform init
+        echo "✅ Terraform inicializado"
 
     - name: Terraform Validate
-      run: terraform validate
+      run: |
+        echo "✅ Validando configuração..."
+        terraform validate
 
     - name: Terraform Plan
-      if: ${{ github.event.inputs.action == 'apply' }}
-      run: terraform plan -lock=false -out=tfplan
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔍 PLANEJANDO INFRAESTRUTURA K3S (FASE 4)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        terraform plan -out=tfplan
 
     - name: Terraform Apply
-      if: ${{ github.event.inputs.action == 'apply' }}
-      # O apply agora apenas cria a infra e baixa o kubeconfig via null_resource
-      run: terraform apply -lock=false -auto-approve tfplan
-
-    - name: Save IP to AWS Parameter Store
-      if: ${{ github.event.inputs.action == 'apply' }}
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: apply
       run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        if [ -n "$EC2_IP" ]; then
-          echo "💾 Salvando IP no AWS Parameter Store..."
-          aws ssm put-parameter \
-            --name "/oficinapro/k3s/ec2-public-ip" \
-            --value "$EC2_IP" \
-            --type "String" \
-            --overwrite \
-            --region us-east-1
-          echo "✅ IP salvo em: /oficinapro/k3s/ec2-public-ip"
-        fi
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🚀 APLICANDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        terraform apply -auto-approve tfplan
+        echo "✅ Terraform apply concluído!"
 
-    - name: Output EC2 IP
-      if: ${{ github.event.inputs.action == 'apply' }}
-      id: ec2_ip
-      run: |
-        EC2_IP=$(terraform output -raw k3s_host_public_ip 2>/dev/null || echo "")
-        echo "EC2 Public IP: $EC2_IP"
-        echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
-        echo ""
-        echo "⚠️  IMPORTANTE: Use este IP nos deployments:"
-        echo "   IP: $EC2_IP"
-        echo ""
-        echo "💡 Você pode usar o output 'ec2_public_ip' deste job em outros workflows!"
-
-    - name: Capture All Outputs
-      if: ${{ github.event.inputs.action == 'apply' }}
+    - name: Capture Outputs
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       id: outputs
       run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📊 OUTPUTS DA INFRAESTRUTURA"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || echo "")
         ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
+        
+        echo "master_ip=$MASTER_IP" >> $GITHUB_OUTPUT
         echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
-        echo "ALB DNS: $ALB_DNS"
+        
+        echo ""
+        echo "🖥️  Master Node IP: $MASTER_IP"
+        echo "🌐 ALB DNS: $ALB_DNS"
+        echo ""
+        
+        # Salvar Master IP no Parameter Store para outros workflows
+        aws ssm put-parameter --name "/oficinapro/k3s/master-ip" --value "$MASTER_IP" --type "String" --overwrite --region us-east-1
+        
+        echo "💾 Master IP salvo no AWS Parameter Store"
+
+    - name: Setup SSH Key
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      run: |
+        echo "🔐 Configurando chave SSH..."
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > chave_nova
+        echo "" >> chave_nova
+        chmod 600 chave_nova
+      shell: bash
+
+    - name: Verify K3s Cluster
+      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      id: verify_cluster
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔍 VERIFICANDO CLUSTER K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        MASTER_IP=$(terraform output -raw k3s_master_public_ip)
+        
+        echo "⏳ Aguardando K3s ficar pronto (timeout: 5 minutos)..."
+        
+        for i in {1..20}; do
+          echo "Tentativa $i/20..."
+          
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ../../chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
+            echo ""
+            echo "✅ Cluster K3s está operacional!"
+            echo "status=ready" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          sleep 15
+        done
+        
+        echo "⚠️  Cluster ainda não está pronto (pode levar até 10 minutos)"
+        echo "status=pending" >> $GITHUB_OUTPUT
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
-      run: terraform destroy -lock=false -auto-approve
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🗑️  DESTRUINDO INFRAESTRUTURA K3S"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        terraform destroy -auto-approve
+        echo "✅ Infraestrutura destruída!"

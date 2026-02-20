@@ -31,25 +31,56 @@ jobs:
 
     - name: 'Terraform Init'
       run: terraform init
-      working-directory: ./network
+      working-directory: ./fase4/01-network
 
     - name: 'Terraform Validate'
       run: terraform validate -no-color
-      working-directory: ./network
+      working-directory: ./fase4/01-network
 
     - name: 'Terraform Plan'
       if: github.event.inputs.action == 'apply'
       run: terraform plan -no-color
-      working-directory: ./network
+      working-directory: ./fase4/01-network
       continue-on-error: true
 
     - name: 'Terraform Apply'
       if: github.event.inputs.action == 'apply'
       run: terraform apply -auto-approve
-      working-directory: ./network
+      working-directory: ./fase4/01-network
 
     - name: 'Terraform Destroy'
       if: github.event.inputs.action == 'destroy'
       run: terraform destroy -auto-approve
-      working-directory: ./network
+      working-directory: ./fase4/01-network
+
+  nat_instance:
+    name: 'Terraform NAT Instance (Optimized)'
+    needs: terraform
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    
+    steps:
+    - name: 'Checkout'
+      uses: actions/checkout@v3
+
+    - name: 'Setup Terraform'
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+
+    - name: 'Terraform Init'
+      run: terraform init
+      working-directory: ./fase4-optimized/nat-instance
+
+    - name: 'Terraform Apply'
+      if: github.event.inputs.action == 'apply'
+      run: terraform apply -auto-approve
+      working-directory: ./fase4-optimized/nat-instance
+
+    - name: 'Terraform Destroy'
+      if: github.event.inputs.action == 'destroy'
+      run: terraform destroy -auto-approve
+      working-directory: ./fase4-optimized/nat-instance
 
