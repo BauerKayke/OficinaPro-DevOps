@@ -174,40 +174,40 @@ resource "aws_dynamodb_table" "payment_status" {
 }
 
 # Null Resource to create additional databases via SQL
-resource "null_resource" "create_databases" {
-  depends_on = [aws_db_instance.consolidated]
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      # Wait for RDS to be fully available
-      sleep 60
-      
-      # Create additional databases using psql
-      PGPASSWORD='${var.db_password}' psql \
-        -h ${aws_db_instance.consolidated.address} \
-        -U ${var.db_username} \
-        -d os_db \
-        -c "CREATE DATABASE billing_db;" || echo "billing_db already exists"
-      
-      PGPASSWORD='${var.db_password}' psql \
-        -h ${aws_db_instance.consolidated.address} \
-        -U ${var.db_username} \
-        -d os_db \
-        -c "CREATE DATABASE execution_db;" || echo "execution_db already exists"
-      
-      PGPASSWORD='${var.db_password}' psql \
-        -h ${aws_db_instance.consolidated.address} \
-        -U ${var.db_username} \
-        -d os_db \
-        -c "CREATE DATABASE customer_db;" || echo "customer_db already exists"
-      
-      PGPASSWORD='${var.db_password}' psql \
-        -h ${aws_db_instance.consolidated.address} \
-        -U ${var.db_username} \
-        -d os_db \
-        -c "CREATE DATABASE saga_db;" || echo "saga_db already exists"
-      
-      echo "✅ All databases created successfully!"
-    EOT
-  }
-}
+# resource "null_resource" "create_databases" {
+#   depends_on = [aws_db_instance.consolidated]
+#
+#   provisioner "local-exec" {
+#     command = <<-EOT
+#       # Wait for RDS to be fully available
+#       sleep 60
+#       
+#       # Create additional databases using psql
+#       PGPASSWORD='${var.db_password}' psql \
+#         -h ${aws_db_instance.consolidated.address} \
+#         -U ${var.db_username} \
+#         -d os_db \
+#         -c "CREATE DATABASE billing_db;" || echo "billing_db already exists"
+#       
+#       PGPASSWORD='${var.db_password}' psql \
+#         -h ${aws_db_instance.consolidated.address} \
+#         -U ${var.db_username} \
+#         -d os_db \
+#         -c "CREATE DATABASE execution_db;" || echo "execution_db already exists"
+#       
+#       PGPASSWORD='${var.db_password}' psql \
+#         -h ${aws_db_instance.consolidated.address} \
+#         -U ${var.db_username} \
+#         -d os_db \
+#         -c "CREATE DATABASE customer_db;" || echo "customer_db already exists"
+#       
+#       PGPASSWORD='${var.db_password}' psql \
+#         -h ${aws_db_instance.consolidated.address} \
+#         -U ${var.db_username} \
+#         -d os_db \
+#         -c "CREATE DATABASE saga_db;" || echo "saga_db already exists"
+#       
+#       echo "✅ All databases created successfully!"
+#     EOT
+#   }
+# }

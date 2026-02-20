@@ -23,11 +23,17 @@ jobs:
       TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
       TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
       TF_VAR_new_relic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
-      TF_VAR_newrelic_account_id: ${{ secrets.NEW_RELIC_ACCOUNT_ID }}
+      TF_VAR_lambda_zip_path: "function.zip"
 
     steps:
     - name: 'Checkout'
       uses: actions/checkout@v3
+
+    - name: Create Dummy Lambda Zip
+      run: |
+        echo "def handler(event, context): return 'hello'" > main.py
+        zip function.zip main.py
+      working-directory: ./fase4/05-auth-lambda
 
     - name: 'Setup Terraform'
       uses: hashicorp/setup-terraform@v2
@@ -36,25 +42,25 @@ jobs:
 
     - name: 'Terraform Init'
       run: terraform init
-      working-directory: ./auth-infra
+      working-directory: ./fase4/05-auth-lambda
 
     - name: 'Terraform Validate'
       run: terraform validate -no-color
-      working-directory: ./auth-infra
+      working-directory: ./fase4/05-auth-lambda
 
     - name: 'Terraform Plan'
       if: github.event.inputs.action == 'apply'
       run: terraform plan -no-color
-      working-directory: ./auth-infra
+      working-directory: ./fase4/05-auth-lambda
       continue-on-error: true
 
     - name: 'Terraform Apply'
       if: github.event.inputs.action == 'apply'
       run: terraform apply -auto-approve
-      working-directory: ./auth-infra
+      working-directory: ./fase4/05-auth-lambda
 
     - name: 'Terraform Destroy'
       if: github.event.inputs.action == 'destroy'
       run: terraform destroy -auto-approve
-      working-directory: ./auth-infra
+      working-directory: ./fase4/05-auth-lambda
 

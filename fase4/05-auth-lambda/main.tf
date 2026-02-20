@@ -47,7 +47,7 @@ data "terraform_remote_state" "databases" {
   backend = "s3"
   config = {
     bucket = "fiap-oficinapro-ckm-tfstate"
-    key    = "fase4/databases/terraform.tfstate"
+    key    = "fase4-optimized/databases/terraform.tfstate"
     region = "us-east-1"
   }
 }
@@ -125,7 +125,7 @@ resource "aws_lambda_function" "auth" {
 
   environment {
     variables = {
-      DB_HOST           = split(":", data.terraform_remote_state.databases.outputs.os_db_endpoint)[0]
+      DB_HOST           = split(":", data.terraform_remote_state.databases.outputs.consolidated_db_endpoint)[0]
       DB_PORT           = "5432"
       DB_NAME           = "os_db"
       DB_USER           = var.db_username

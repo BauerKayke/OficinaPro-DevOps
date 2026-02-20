@@ -47,7 +47,7 @@ data "terraform_remote_state" "messaging" {
   backend = "s3"
   config = {
     bucket = "fiap-oficinapro-ckm-tfstate"
-    key    = "fase4/messaging/terraform.tfstate"
+    key    = "fase4-optimized/messaging/terraform.tfstate"
     region = "us-east-1"
   }
 }

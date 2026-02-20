@@ -29,4 +29,16 @@ kubectl create namespace oficinapro-prod || true
 # Install AWS CLI
 snap install aws-cli --classic
 
+# Install Nginx Ingress Controller
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/baremetal/deploy.yaml
+
+# Wait for Ingress Controller to be ready
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=120s
+
+# Patch Ingress Controller Service to use NodePort 30080
+kubectl patch service ingress-nginx-controller -n ingress-nginx --type='json' -p='[{"op": "replace", "path": "/spec/ports/0/nodePort", "value": 30080}]'
+
 echo "✅ K3s installation complete!"
