@@ -41,4 +41,15 @@ kubectl wait --namespace ingress-nginx \
 # Patch Ingress Controller Service to use NodePort 30080
 kubectl patch service ingress-nginx-controller -n ingress-nginx --type='json' -p='[{"op": "replace", "path": "/spec/ports/0/nodePort", "value": 30080}]'
 
+# Gravar kubeconfig no Parameter Store (para deploy via kubectl do GitHub Runner)
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "")
+if [ -n "$PUBLIC_IP" ] && [ -f /etc/rancher/k3s/k3s.yaml ]; then
+  KUBECONFIG_CONTENT=$(sed "s/127.0.0.1/$PUBLIC_IP/g" /etc/rancher/k3s/k3s.yaml)
+  aws ssm put-parameter --name "/oficinapro/k3s/kubeconfig" \
+    --value "$KUBECONFIG_CONTENT" \
+    --type "SecureString" \
+    --overwrite \
+    --region us-east-1 2>/dev/null && echo "Kubeconfig saved to Parameter Store" || true
+fi
+
 echo "✅ K3s installation complete!"

@@ -83,13 +83,20 @@ resource "aws_security_group" "k3s" {
     description = "SSH access"
   }
 
-  # K3s API
+  # K3s API (VPC + internet para deploy via kubectl do GitHub Runner)
   ingress {
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
     cidr_blocks = [data.terraform_remote_state.network.outputs.vpc_cidr]
-    description = "K3s API"
+    description = "K3s API (VPC)"
+  }
+  ingress {
+    from_port   = 6443
+    to_port     = 6443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "K3s API (deploy via kubectl - GitHub Runner)"
   }
 
   # HTTP from ALB
@@ -197,6 +204,26 @@ resource "aws_iam_role_policy_attachment" "k3s_ssm" {
 resource "aws_iam_role_policy_attachment" "k3s_sqs" {
   role       = aws_iam_role.k3s.name
   policy_arn = data.terraform_remote_state.messaging.outputs.sqs_access_policy_arn
+}
+
+# ECR pull (para imagens Docker nos deploys)
+resource "aws_iam_role_policy_attachment" "k3s_ecr" {
+  role       = aws_iam_role.k3s.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+# Policy para gravar kubeconfig no Parameter Store (deploy via kubectl)
+resource "aws_iam_role_policy" "k3s_ssm_param" {
+  name = "${var.project_name}-k3s-ssm-param"
+  role = aws_iam_role.k3s.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssm:PutParameter", "ssm:GetParameter"]
+      Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/oficinapro/k3s/kubeconfig*"
+    }]
+  })
 }
 
 # IAM Instance Profile
