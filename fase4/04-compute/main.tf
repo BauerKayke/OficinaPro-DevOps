@@ -268,6 +268,7 @@ resource "aws_instance" "k3s" {
 
   tags = {
     Name = "${var.project_name}-k3s-node-fase4"
+    Role = "master"
   }
 }
 
