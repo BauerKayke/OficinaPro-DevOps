@@ -257,32 +257,43 @@ jobs:
         MASTER_IP=$(terraform output -raw k3s_master_public_ip)
         INSTANCE_ID=$(terraform output -raw k3s_instance_id)
         
-        echo "⏳ Aguardando SSM/K3s ficar pronto (timeout: 8 minutos)..."
-        echo "   Tentando SSM (não depende de porta 22) e SSH como fallback"
+        echo "⏳ user_data leva ~10-12 min (apt upgrade + K3s + nginx-ingress)"
+        echo "   Esperando 4 min antes da 1ª tentativa (SSM precisa registrar)..."
+        sleep 240
+        
+        echo ""
+        echo "Iniciando verificações (timeout: 12 min)..."
         echo ""
         
         for i in {1..24}; do
           echo "Tentativa $i/24..."
           
-          # 1) SSM primeiro - funciona mesmo se porta 22 estiver bloqueada
+          # 1) SSM - funciona mesmo se porta 22 estiver bloqueada
+          ERR=$(mktemp)
           CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --parameters '{"commands":["sudo kubectl get nodes 2>/dev/null || echo FAIL"]}' \
-            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
+            --timeout-seconds 60 --output text --query "Command.CommandId" 2>"$ERR")
           if [ -n "$CID" ]; then
-            sleep 8
+            sleep 10
+            ST=$(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "Status" --output text 2>/dev/null)
             OUT=$(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text 2>/dev/null | tr -d '\r')
+            [ $i -le 3 ] && echo "   SSM Status: $ST"
             if echo "$OUT" | grep -q "Ready"; then
               echo ""
               echo "$OUT"
               echo ""
               echo "✅ Cluster K3s está operacional (via SSM)!"
               echo "status=ready" >> $GITHUB_OUTPUT
+              rm -f "$ERR"
               exit 0
             fi
+          else
+            [ $i -eq 1 ] && echo "   SSM ainda não registrado: $(cat "$ERR" 2>/dev/null | head -1)"
           fi
+          rm -f "$ERR"
           
-          # 2) SSH como fallback (se porta 22 estiver acessível)
+          # 2) SSH como fallback
           if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
             echo ""
             echo "✅ Cluster K3s está operacional (via SSH)!"
@@ -290,11 +301,11 @@ jobs:
             exit 0
           fi
           
-          sleep 20
+          sleep 30
         done
         
-        echo "⚠️  Cluster ainda não está pronto (pode levar até 10 minutos)"
-        echo "   Verifique: porta 22 liberada no SG? SSM registrado? K3s iniciou?"
+        echo "⚠️  Cluster ainda não ficou pronto após ~16 min"
+        echo "   user_data pode estar travado; use action=debug para detalhes"
         echo "status=pending" >> $GITHUB_OUTPUT
 
     - name: Debug K3s (opcional - marque run_debug no dispatch)
