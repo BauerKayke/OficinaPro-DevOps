@@ -189,7 +189,7 @@ jobs:
         for i in {1..20}; do
           echo "Tentativa $i/20..."
           
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ../../chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
             echo ""
             echo "✅ Cluster K3s está operacional!"
             echo "status=ready" >> $GITHUB_OUTPUT

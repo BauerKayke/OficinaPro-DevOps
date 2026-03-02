@@ -1,0 +1,224 @@
+# Debug K3s Cluster - Diagnóstico quando a instância não fica disponível
+# Execução: manual (workflow_dispatch)
+# Rode após App Infra CI/CD quando "Verify K3s Cluster" falhar
+
+name: 'Debug - K3s Cluster (Por que não fica pronto?)'
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  debug:
+    name: 'Diagnóstico K3s'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 'Configurar AWS Credentials'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: '1. Buscar instância K3s'
+        id: instance
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 BUSCANDO INSTÂNCIA K3S"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Por tag Role=master
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running,pending" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text 2>/dev/null || echo "")
+          
+          [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ] && \
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=*k3s*" "Name=instance-state-name,Values=running,pending" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+            echo "::error::Nenhuma instância K3s encontrada"
+            exit 1
+          fi
+          
+          # Métodos AWS (não precisam de SSH)
+          aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].{Id:InstanceId,State:State.Name,Type:InstanceType,IP:PublicIpAddress,PrivateIP:PrivateIpAddress,LaunchTime:LaunchTime,SecurityGroups:SecurityGroups[].GroupId}' \
+            --output table
+          
+          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+          STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].State.Name" --output text)
+          
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "state=$STATE" >> $GITHUB_OUTPUT
+          echo ""
+          echo "✅ Instance: $INSTANCE_ID | IP: $PUBLIC_IP | State: $STATE"
+
+      - name: '2. Console Output (boot logs)'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 CONSOLE OUTPUT (últimas linhas do boot)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          aws ec2 get-console-output --instance-id ${{ steps.instance.outputs.instance_id }} \
+            --query 'Output' --output text 2>/dev/null | tail -100 || echo "⚠️ Console output ainda não disponível (instância pode estar inicializando)"
+
+      - name: '3. Security Groups (porta 22)'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔒 SECURITY GROUPS - Regras de entrada"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          SG_IDS=$(aws ec2 describe-instances --instance-ids ${{ steps.instance.outputs.instance_id }} \
+            --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text)
+          for sg in $SG_IDS; do
+            echo ""
+            echo "--- SG: $sg ---"
+            aws ec2 describe-security-groups --group-ids $sg \
+              --query 'SecurityGroups[0].{Name:GroupName,Inbound:IpPermissions}' --output table
+          done
+          echo ""
+          echo "⚠️ Verifique se existe regra SSH (porta 22) de 0.0.0.0/0 ou dos IPs do GitHub Actions"
+
+      - name: '4. Status Checks & Métricas'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 STATUS CHECKS"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          aws ec2 describe-instance-status --instance-ids ${{ steps.instance.outputs.instance_id }} \
+            --query 'InstanceStatuses[0].{State:InstanceState.Name,System:SystemStatus.Status,Instance:InstanceStatus.Status}' \
+            --output table 2>/dev/null || echo "Status ainda não disponível"
+          echo ""
+          echo "--- System Log (eventos) ---"
+          aws ec2 describe-instance-status --instance-ids ${{ steps.instance.outputs.instance_id }} \
+            --include-all-instances \
+            --query 'InstanceStatuses[0].SystemStatus' --output json 2>/dev/null || true
+
+      - name: '5. Teste de conectividade (porta 22)'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🌐 TESTE DE CONECTIVIDADE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          IP="${{ steps.instance.outputs.public_ip }}"
+          if [ -z "$IP" ] || [ "$IP" == "None" ]; then
+            echo "⚠️ Instância sem IP público (pode estar em subnet privada ou ainda alocando)"
+            echo "Verifique: subnet pública, Elastic IP, ou IGW na route table"
+            exit 0
+          fi
+          echo "Testando $IP:22 (timeout 10s)..."
+          if nc -zv -w 10 "$IP" 22 2>&1; then
+            echo "✅ Porta 22 ACESSÍVEL - SSH deve funcionar"
+          else
+            echo "❌ Porta 22 INACESSÍVEL - Possíveis causas:"
+            echo "   - Security Group bloqueando (adicione 0.0.0.0/0 na porta 22)"
+            echo "   - Instância em subnet privada sem NAT"
+            echo "   - K3s/user_data ainda em execução (aguarde 5-10 min)"
+            echo "   - IP do GitHub Actions bloqueado (use 0.0.0.0/0 para teste)"
+          fi
+
+      - name: '6. Tentar SSM (não usa porta 22)'
+        id: ssm
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📡 TESTE SSM (alternativa ao SSH)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids ${{ steps.instance.outputs.instance_id }} \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["echo SSM_OK; whoami; uptime; systemctl is-active k3s 2>/dev/null || echo k3s-not-found; ls -la /etc/rancher/k3s/ 2>/dev/null || echo no-k3s-dir"]}' \
+            --timeout-seconds 30 \
+            --output text \
+            --query "Command.CommandId" 2>/dev/null || echo "")
+          
+          if [ -z "$COMMAND_ID" ]; then
+            echo "⚠️ SSM não disponível (Instance precisa de IAM role com SSM + Agent)"
+            echo "ssm_ok=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          sleep 8
+          RESULT=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id ${{ steps.instance.outputs.instance_id }} 2>/dev/null || echo "{}")
+          STATUS=$(echo "$RESULT" | jq -r '.Status // "Unknown"')
+          echo "SSM Status: $STATUS"
+          echo "ssm_ok=$STATUS" >> $GITHUB_OUTPUT
+          
+          if [ "$STATUS" == "Success" ]; then
+            echo ""
+            echo "=== SSM Output ==="
+            echo "$RESULT" | jq -r '.StandardOutputContent // empty'
+            echo ""
+            echo "=== SSM Errors ==="
+            echo "$RESULT" | jq -r '.StandardErrorContent // empty'
+          else
+            echo "SSM StatusDetails: $(echo "$RESULT" | jq -r '.StatusDetails // empty')"
+          fi
+
+      - name: '7. Diagnóstico via SSH (se IP disponível)'
+        if: steps.instance.outputs.public_ip != '' && steps.instance.outputs.public_ip != 'None'
+        continue-on-error: true
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ steps.instance.outputs.public_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 15s
+          command_timeout: 2m
+          script: |
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "✅ SSH CONECTOU - DIAGNÓSTICO INTERNO"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            echo ""
+            echo "--- Uptime ---"
+            uptime
+            
+            echo ""
+            echo "--- K3s Service ---"
+            sudo systemctl status k3s 2>/dev/null || echo "systemctl k3s não encontrado"
+            sudo systemctl is-active k3s 2>/dev/null || echo "inactive"
+            
+            echo ""
+            echo "--- K3s logs (últimas 30 linhas) ---"
+            sudo journalctl -u k3s -n 30 --no-pager 2>/dev/null || echo "sem journalctl"
+            
+            echo ""
+            echo "--- kubectl get nodes ---"
+            sudo kubectl get nodes 2>/dev/null || sudo k3s kubectl get nodes 2>/dev/null || echo "kubectl falhou"
+            
+            echo ""
+            echo "--- Disco e Memória ---"
+            df -h /
+            free -m
+            
+            echo ""
+            echo "--- user_data / cloud-init ---"
+            cat /var/log/cloud-init-output.log 2>/dev/null | tail -80 || echo "cloud-init log não encontrado"
+            
+            echo ""
+            echo "--- Processos K3s ---"
+            ps aux | grep -E "k3s|containerd" | grep -v grep || true
+
+      - name: '8. Resumo do diagnóstico'
+        run: |
+          echo "## 🔍 Diagnóstico K3s Cluster" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Instance ID | \`${{ steps.instance.outputs.instance_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| IP Público | \`${{ steps.instance.outputs.public_ip }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Estado | \`${{ steps.instance.outputs.state }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Possíveis causas quando K3s não fica pronto" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Security Group**: Porta 22 bloqueada → Adicione regra Inbound TCP 22 de \`0.0.0.0/0\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Subnet privada**: Instância sem IP público → Use subnet pública ou NAT" >> $GITHUB_STEP_SUMMARY
+          echo "3. **Boot lento**: K3s leva 3-8 min para subir → Aguarde e reexecute App Infra" >> $GITHUB_STEP_SUMMARY
+          echo "4. **User data falhou**: cloud-init com erro → Verifique console output acima" >> $GITHUB_STEP_SUMMARY
+          echo "5. **Recursos insuficientes**: Pouca RAM/CPU → Instance type muito pequena" >> $GITHUB_STEP_SUMMARY
