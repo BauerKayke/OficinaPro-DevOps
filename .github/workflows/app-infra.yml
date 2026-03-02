@@ -255,23 +255,46 @@ jobs:
         echo ""
         
         MASTER_IP=$(terraform output -raw k3s_master_public_ip)
+        INSTANCE_ID=$(terraform output -raw k3s_instance_id)
         
-        echo "⏳ Aguardando K3s ficar pronto (timeout: 5 minutos)..."
+        echo "⏳ Aguardando SSM/K3s ficar pronto (timeout: 8 minutos)..."
+        echo "   Tentando SSM (não depende de porta 22) e SSH como fallback"
+        echo ""
         
-        for i in {1..20}; do
-          echo "Tentativa $i/20..."
+        for i in {1..24}; do
+          echo "Tentativa $i/24..."
           
+          # 1) SSM primeiro - funciona mesmo se porta 22 estiver bloqueada
+          CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["sudo kubectl get nodes 2>/dev/null || echo FAIL"]}' \
+            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
+          if [ -n "$CID" ]; then
+            sleep 8
+            OUT=$(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text 2>/dev/null | tr -d '\r')
+            if echo "$OUT" | grep -q "Ready"; then
+              echo ""
+              echo "$OUT"
+              echo ""
+              echo "✅ Cluster K3s está operacional (via SSM)!"
+              echo "status=ready" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # 2) SSH como fallback (se porta 22 estiver acessível)
           if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
             echo ""
-            echo "✅ Cluster K3s está operacional!"
+            echo "✅ Cluster K3s está operacional (via SSH)!"
             echo "status=ready" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          sleep 15
+          sleep 20
         done
         
         echo "⚠️  Cluster ainda não está pronto (pode levar até 10 minutos)"
+        echo "   Verifique: porta 22 liberada no SG? SSM registrado? K3s iniciou?"
         echo "status=pending" >> $GITHUB_OUTPUT
 
     - name: Debug K3s (opcional - marque run_debug no dispatch)
@@ -281,14 +304,21 @@ jobs:
         echo "🔍 DIAGNÓSTICO K3S (run_debug=true)"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text 2>/dev/null)
-        INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
+        INSTANCE_ID=$(terraform output -raw k3s_instance_id 2>/dev/null || aws ec2 describe-instances --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
         echo "IP: $MASTER_IP | Instance: $INSTANCE_ID"
+        echo "--- Security Group ingress ---"
+        for sg in $(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text); do
+          aws ec2 describe-security-groups --group-ids $sg --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`]' --output table 2>/dev/null || true
+        done
         echo "--- Console Output ---"
         aws ec2 get-console-output --instance-id "$INSTANCE_ID" --query 'Output' --output text 2>/dev/null | tail -60
         echo "--- Teste porta 22 ---"
-        nc -zv -w 10 "$MASTER_IP" 22 2>&1 || echo "Porta 22 inacessível"
-        echo "--- SSM ---"
-        aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" --parameters '{"commands":["systemctl status k3s --no-pager 2>/dev/null|head -15","sudo kubectl get nodes 2>/dev/null"]}' --timeout 30 --output text --query "Command.CommandId" 2>/dev/null | xargs -I{} sh -c 'sleep 5; aws ssm get-command-invocation --command-id {} --instance-id '"$INSTANCE_ID"' --query StandardOutputContent --output text 2>/dev/null' || echo "SSM indisponível"
+        nc -zv -w 10 "$MASTER_IP" 22 2>&1 || echo "Porta 22 inacessível (use SSM para Verify)"
+        echo "--- SSM diagnóstico ---"
+        CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" \
+          --parameters '{"commands":["echo === K3s === && systemctl status k3s --no-pager 2>/dev/null|head -15","echo === Nodes === && sudo kubectl get nodes 2>/dev/null"]}' \
+          --timeout-seconds 60 --output text --query "Command.CommandId" 2>/dev/null)
+        if [ -n "$CID" ]; then sleep 10; aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text 2>/dev/null; else echo "SSM indisponível"; fi
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
