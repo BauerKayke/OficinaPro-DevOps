@@ -268,7 +268,15 @@ jobs:
         for i in {1..24}; do
           echo "Tentativa $i/24..."
           
-          # 1) SSM - funciona mesmo se porta 22 estiver bloqueada
+          # 1) SSH primeiro (mais rápido quando disponível)
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
+            echo ""
+            echo "✅ Cluster K3s está operacional (via SSH)!"
+            echo "status=ready" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 2) SSM - funciona quando porta 22 bloqueada ou ConnectionLost
           ERR=$(mktemp)
           CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
@@ -292,14 +300,6 @@ jobs:
             [ $i -eq 1 ] && echo "   SSM ainda não registrado: $(cat "$ERR" 2>/dev/null | head -1)"
           fi
           rm -f "$ERR"
-          
-          # 2) SSH como fallback
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
-            echo ""
-            echo "✅ Cluster K3s está operacional (via SSH)!"
-            echo "status=ready" >> $GITHUB_OUTPUT
-            exit 0
-          fi
           
           sleep 30
         done
