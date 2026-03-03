@@ -257,9 +257,9 @@ jobs:
         MASTER_IP=$(terraform output -raw k3s_master_public_ip)
         INSTANCE_ID=$(terraform output -raw k3s_instance_id)
         
-        echo "⏳ user_data leva ~10-12 min (apt upgrade + K3s + nginx-ingress)"
-        echo "   Esperando 4 min antes da 1ª tentativa (SSM precisa registrar)..."
-        sleep 240
+        echo "⏳ user_data: K3s + nginx-ingress (~5-7 min, sem apt upgrade)"
+        echo "   Esperando 2 min antes da 1ª tentativa (SSM + VPC endpoints)..."
+        sleep 120
         
         echo ""
         echo "Iniciando verificações (timeout: 12 min)..."
@@ -317,6 +317,8 @@ jobs:
         MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text 2>/dev/null)
         INSTANCE_ID=$(terraform output -raw k3s_instance_id 2>/dev/null || aws ec2 describe-instances --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
         echo "IP: $MASTER_IP | Instance: $INSTANCE_ID"
+        echo "--- SSM Fleet Manager (instância registrada?) ---"
+        aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].[PingStatus,AgentVersion,RegistrationDate]' --output text 2>/dev/null || echo "Instância NÃO aparece no Fleet Manager (Undeliverable)"
         echo "--- Security Group ingress ---"
         for sg in $(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text); do
           aws ec2 describe-security-groups --group-ids $sg --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`]' --output table 2>/dev/null || true

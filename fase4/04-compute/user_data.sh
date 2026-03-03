@@ -1,11 +1,8 @@
 #!/bin/bash
 set -e
 
-# Update system
+# Update e instala deps (sem upgrade - economiza 10+ min e evita lock que atrapalha SSM)
 apt-get update
-apt-get upgrade -y
-
-# Install dependencies
 apt-get install -y curl wget apt-transport-https ca-certificates gnupg lsb-release
 
 # Set hostname
