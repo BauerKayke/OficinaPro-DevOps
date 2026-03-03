@@ -257,55 +257,47 @@ jobs:
         MASTER_IP=$(terraform output -raw k3s_master_public_ip)
         INSTANCE_ID=$(terraform output -raw k3s_instance_id)
         
-        echo "⏳ user_data: K3s + nginx-ingress (~5-7 min, sem apt upgrade)"
-        echo "   Esperando 2 min antes da 1ª tentativa (SSM + VPC endpoints)..."
-        sleep 120
+        echo "⏳ Polling: Parameter Store /oficinapro/k3s/bootstrap-status"
+        echo "   (user_data grava status a cada etapa - não depende de SSH/SSM)"
+        echo "   Esperando 90s antes da 1ª tentativa..."
+        sleep 90
         
-        echo ""
-        echo "Iniciando verificações (timeout: 12 min)..."
-        echo ""
-        
-        for i in {1..24}; do
-          echo "Tentativa $i/24..."
+        for i in {1..30}; do
+          echo "Tentativa $i/30..."
           
-          # 1) SSH primeiro (mais rápido quando disponível)
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
+          # 1) Parameter Store (método principal - user_data grava status)
+          STATUS=$(aws ssm get-parameter --name "/oficinapro/k3s/bootstrap-status" --query "Parameter.Value" --output text 2>/dev/null || echo "")
+          [ -n "$STATUS" ] && echo "   bootstrap-status: $STATUS"
+          if [ "$STATUS" = "complete" ] || [ "$STATUS" = "k3s_ready" ]; then
             echo ""
-            echo "✅ Cluster K3s está operacional (via SSH)!"
+            echo "✅ Cluster K3s operacional! (status=$STATUS)"
             echo "status=ready" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # 2) SSM - funciona quando porta 22 bloqueada ou ConnectionLost
-          ERR=$(mktemp)
+          # 2) SSH (quando porta 22 acessível)
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
+            echo ""
+            echo "✅ Cluster K3s operacional (via SSH)!"
+            echo "status=ready" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 3) SSM Run Command (fallback)
           CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --parameters '{"commands":["sudo kubectl get nodes 2>/dev/null || echo FAIL"]}' \
-            --timeout-seconds 60 --output text --query "Command.CommandId" 2>"$ERR")
+            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
           if [ -n "$CID" ]; then
-            sleep 10
-            ST=$(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "Status" --output text 2>/dev/null)
+            sleep 12
             OUT=$(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text 2>/dev/null | tr -d '\r')
-            [ $i -le 3 ] && echo "   SSM Status: $ST"
-            if echo "$OUT" | grep -q "Ready"; then
-              echo ""
-              echo "$OUT"
-              echo ""
-              echo "✅ Cluster K3s está operacional (via SSM)!"
-              echo "status=ready" >> $GITHUB_OUTPUT
-              rm -f "$ERR"
-              exit 0
-            fi
-          else
-            [ $i -eq 1 ] && echo "   SSM ainda não registrado: $(cat "$ERR" 2>/dev/null | head -1)"
+            echo "$OUT" | grep -q "Ready" && echo "✅ Cluster OK (via SSM)!" && echo "status=ready" >> $GITHUB_OUTPUT && exit 0
           fi
-          rm -f "$ERR"
           
-          sleep 30
+          sleep 20
         done
         
-        echo "⚠️  Cluster ainda não ficou pronto após ~16 min"
-        echo "   user_data pode estar travado; use action=debug para detalhes"
+        echo "⚠️  Timeout. Verifique /oficinapro/k3s/bootstrap-status no Parameter Store"
         echo "status=pending" >> $GITHUB_OUTPUT
 
     - name: Debug K3s (opcional - marque run_debug no dispatch)
@@ -317,6 +309,8 @@ jobs:
         MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text 2>/dev/null)
         INSTANCE_ID=$(terraform output -raw k3s_instance_id 2>/dev/null || aws ec2 describe-instances --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
         echo "IP: $MASTER_IP | Instance: $INSTANCE_ID"
+        echo "--- Bootstrap status (Parameter Store) ---"
+        aws ssm get-parameter --name "/oficinapro/k3s/bootstrap-status" --query "Parameter.Value" --output text 2>/dev/null || echo "não existe ainda"
         echo "--- SSM Fleet Manager (instância registrada?) ---"
         aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].[PingStatus,AgentVersion,RegistrationDate]' --output text 2>/dev/null || echo "Instância NÃO aparece no Fleet Manager (Undeliverable)"
         echo "--- Security Group ingress ---"

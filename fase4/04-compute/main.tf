@@ -287,7 +287,7 @@ resource "aws_iam_role_policy" "k3s_ssm_param" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["ssm:PutParameter", "ssm:GetParameter"]
-      Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/oficinapro/k3s/kubeconfig*"
+      Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/oficinapro/k3s/*"
     }]
   })
 }
