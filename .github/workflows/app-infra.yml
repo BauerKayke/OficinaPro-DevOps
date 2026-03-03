@@ -328,20 +328,26 @@ jobs:
         echo "--- SSM diagnóstico ---"
         SSM_ERR=$(mktemp)
         CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" \
-          --parameters '{"commands":["echo K3S_STATUS && systemctl status k3s --no-pager 2>&1 | head -20","echo KUBECTL_NODES && sudo kubectl get nodes 2>&1"]}' \
+          --parameters '{"commands":["echo K3S_ACTIVE && (systemctl is-active k3s 2>/dev/null || echo inactive)","echo KUBECTL && (sudo kubectl get nodes 2>/dev/null || echo kubectl-fail)"]}' \
           --timeout-seconds 90 --output text --query "Command.CommandId" 2>"$SSM_ERR")
         if [ -z "$CID" ]; then
           echo "❌ send-command falhou:"
           cat "$SSM_ERR"
         else
-          echo "CommandId: $CID - aguardando 12s..."
-          sleep 12
+          echo "CommandId: $CID - aguardando 15s..."
+          sleep 15
           echo "--- Status/Output ---"
-          echo "Status: $(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'Status' --output text 2>/dev/null)"
+          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'Status' --output text
+          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StatusDetails' --output text 2>/dev/null || true
           echo "--- Stdout ---"
           aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text 2>/dev/null || true
           echo "--- Stderr ---"
           aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text 2>/dev/null || true
+          echo "--- Comando simples (whoami + k3s check) ---"
+          CID2=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":["whoami","test -f /usr/local/bin/kubectl && echo kubectl-OK || echo kubectl-NOT-FOUND","systemctl is-active k3s 2>/dev/null || echo k3s-not-running"]}' \
+            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
+          [ -n "$CID2" ] && sleep 8 && aws ssm get-command-invocation --command-id "$CID2" --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text
         fi
         rm -f "$SSM_ERR"
 
