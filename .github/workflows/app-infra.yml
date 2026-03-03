@@ -326,10 +326,24 @@ jobs:
         echo "--- Teste porta 22 ---"
         nc -zv -w 10 "$MASTER_IP" 22 2>&1 || echo "Porta 22 inacessível (use SSM para Verify)"
         echo "--- SSM diagnóstico ---"
+        SSM_ERR=$(mktemp)
         CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" \
-          --parameters '{"commands":["echo === K3s === && systemctl status k3s --no-pager 2>/dev/null|head -15","echo === Nodes === && sudo kubectl get nodes 2>/dev/null"]}' \
-          --timeout-seconds 60 --output text --query "Command.CommandId" 2>/dev/null)
-        if [ -n "$CID" ]; then sleep 10; aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text 2>/dev/null; else echo "SSM indisponível"; fi
+          --parameters '{"commands":["echo K3S_STATUS && systemctl status k3s --no-pager 2>&1 | head -20","echo KUBECTL_NODES && sudo kubectl get nodes 2>&1"]}' \
+          --timeout-seconds 90 --output text --query "Command.CommandId" 2>"$SSM_ERR")
+        if [ -z "$CID" ]; then
+          echo "❌ send-command falhou:"
+          cat "$SSM_ERR"
+        else
+          echo "CommandId: $CID - aguardando 12s..."
+          sleep 12
+          echo "--- Status/Output ---"
+          echo "Status: $(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'Status' --output text 2>/dev/null)"
+          echo "--- Stdout ---"
+          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text 2>/dev/null || true
+          echo "--- Stderr ---"
+          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text 2>/dev/null || true
+        fi
+        rm -f "$SSM_ERR"
 
     - name: Terraform Destroy
       if: ${{ github.event.inputs.action == 'destroy' }}
