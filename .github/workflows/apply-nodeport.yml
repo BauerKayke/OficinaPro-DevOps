@@ -1,4 +1,4 @@
-name: Apply NodePort to Saga
+name: Apply NodePort to Saga (EKS)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
 jobs:
   apply-nodeport:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,52 +27,21 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Buscar K3s Master IP
+      - name: Configurar kubectl (EKS)
         id: k3s
         run: |
-          MASTER_IP=$(aws ec2 describe-instances \
-            --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" \
-            --output text 2>/dev/null)
-          [ -z "$MASTER_IP" ] || [ "$MASTER_IP" == "None" ] && \
-          MASTER_IP=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=*k3s*" "Name=instance-state-name,Values=running" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" \
-            --output text 2>/dev/null)
-          [ -z "$MASTER_IP" ] || [ "$MASTER_IP" == "None" ] && \
-          MASTER_IP=$(aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text 2>/dev/null || echo "")
-          if [ -z "$MASTER_IP" ] || [ "$MASTER_IP" == "None" ]; then
-            echo "::error::K3s Master não encontrado"
-            exit 1
-          fi
-          echo "master_ip=${MASTER_IP}" >> $GITHUB_OUTPUT
-          echo "✅ K3s Master: ${MASTER_IP}"
-      
-      - name: Configure SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ steps.k3s.outputs.master_ip }} >> ~/.ssh/known_hosts
-      
+          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+          aws eks update-kubeconfig --region us-east-1 --name "$CLUSTER"
+          curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
+          echo "node_ip=${NODE_IP}" >> $GITHUB_OUTPUT
+          echo "master_ip=${NODE_IP}" >> $GITHUB_OUTPUT
+          echo "✅ Node IP: ${NODE_IP}"
+
       - name: Apply NodePort Configuration
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@${{ steps.k3s.outputs.master_ip }} << 'ENDSSH'
-          export KUBECONFIG=/home/ubuntu/.kube/config
-          
-          # Setup kubeconfig se necessário
-          if [ ! -f /home/ubuntu/.kube/config ]; then
-              mkdir -p /home/ubuntu/.kube
-              sudo cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
-              sudo chown ubuntu:ubuntu /home/ubuntu/.kube/config
-          fi
-          
-          # Deletar service antigo
           kubectl delete svc saga-orchestrator -n oficinapro-prod 2>/dev/null || true
-          
-          # Criar novo NodePort
           kubectl apply -f - <<'EOFYAML'
           apiVersion: v1
           kind: Service
@@ -89,24 +58,16 @@ jobs:
               targetPort: 8084
               nodePort: 30084
           EOFYAML
-          
-          # Verificar
-          echo "Waiting for service..."
           sleep 5
           kubectl get svc saga-orchestrator -n oficinapro-prod
-          
-          echo ""
-          echo "✅ NodePort configured successfully!"
-          echo "Test with: curl -X POST http://${{ steps.k3s.outputs.master_ip }}:30084/saga/create-os ..."
-          ENDSSH
-      
+          echo "✅ NodePort configurado - acesse via Node IP:30084"
+
       - name: Test External Access
         run: |
-          echo "Waiting 10s for service to be ready..."
           sleep 10
-          
-          echo "Testing external access..."
-          curl -X POST http://${{ steps.k3s.outputs.master_ip }}:30084/saga/create-os \
+          NODE_IP="${{ steps.k3s.outputs.node_ip }}"
+          [ -z "$NODE_IP" ] && NODE_IP="${{ steps.k3s.outputs.master_ip }}"
+          curl -X POST http://${NODE_IP}:30084/saga/create-os \
             -H 'Content-Type: application/json' \
             -d '{"clienteId":"b02aa0c2-d2e6-4622-8b78-fa53112e9d43","veiculoPlaca":"SAGA1234","descricaoProblema":"Teste GitHub Actions","valorServicos":1500,"valorPecas":800}' \
-            -w "\nHTTP Status: %{http_code}\n" || echo "Connection failed (may need time to propagate)"
+            -w "\nHTTP Status: %{http_code}\n" || echo "Connection failed"

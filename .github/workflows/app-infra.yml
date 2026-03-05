@@ -12,17 +12,12 @@ on:
         - apply
         - destroy
         - debug
-      run_debug:
-        description: 'Rodar diagnóstico K3s após Verify (quando action=apply)'
-        required: false
-        default: false
-        type: boolean
   push:
     branches:
       - main
       - master
     paths:
-      - 'fase4/04-compute/**'
+      - 'fase4/05-eks/**'
       - 'fase4-optimized/databases/**'
       - 'fase4-optimized/messaging/**'
       - '.github/workflows/app-infra.yml'
@@ -51,12 +46,12 @@ jobs:
       working-directory: ./fase4-optimized/databases
 
     - name: Terraform Apply
-      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      if: ${{ github.event.inputs.action == 'apply' || (github.event.inputs.action != 'destroy' && github.event_name == 'push') }}
       run: terraform apply -auto-approve
       working-directory: ./fase4-optimized/databases
 
     - name: Terraform Destroy
-      if: ${{ github.event.inputs.action == 'destroy' }}
+      if: github.event.inputs.action == 'destroy'
       run: terraform destroy -auto-approve
       working-directory: ./fase4-optimized/databases
 
@@ -82,17 +77,17 @@ jobs:
       working-directory: ./fase4-optimized/messaging
 
     - name: Terraform Apply
-      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
+      if: ${{ github.event.inputs.action == 'apply' || (github.event.inputs.action != 'destroy' && github.event_name == 'push') }}
       run: terraform apply -auto-approve
       working-directory: ./fase4-optimized/messaging
 
     - name: Terraform Destroy
-      if: ${{ github.event.inputs.action == 'destroy' }}
+      if: github.event.inputs.action == 'destroy'
       run: terraform destroy -auto-approve
       working-directory: ./fase4-optimized/messaging
 
-  debug:
-    name: '🔍 Debug K3s (só quando action=debug)'
+  debug-eks:
+    name: '🔍 Debug EKS'
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'debug'
     env:
@@ -100,79 +95,34 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
     steps:
-      - name: Configurar AWS
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-      - name: Buscar instância K3s
-        id: inst
-        run: |
-          ID=$(aws ec2 describe-instances --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running,pending" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
-          [ -z "$ID" ] || [ "$ID" == "None" ] && ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=*k3s*" "Name=instance-state-name,Values=running,pending" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
-          [ -z "$ID" ] && { echo "::error::Instância K3s não encontrada"; exit 1; }
-          IP=$(aws ec2 describe-instances --instance-ids "$ID" --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          echo "instance_id=$ID" >> $GITHUB_OUTPUT
-          echo "public_ip=$IP" >> $GITHUB_OUTPUT
-          echo "✅ Instance: $ID | IP: $IP"
-      - name: Console Output
-        run: aws ec2 get-console-output --instance-id ${{ steps.inst.outputs.instance_id }} --query 'Output' --output text 2>/dev/null | tail -80 || echo "Console ainda não disponível"
-      - name: Security Groups (porta 22)
-        run: |
-          for sg in $(aws ec2 describe-instances --instance-ids ${{ steps.inst.outputs.instance_id }} --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text); do
-            echo "--- SG $sg ---"
-            aws ec2 describe-security-groups --group-ids $sg --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`]' --output table
-          done
-      - name: Teste porta 22
-        run: |
-          IP="${{ steps.inst.outputs.public_ip }}"
-          [ -z "$IP" ] || [ "$IP" == "None" ] && { echo "Sem IP público"; exit 0; }
-          nc -zv -w 10 "$IP" 22 2>&1 && echo "✅ Porta 22 OK" || echo "❌ Porta 22 inacessível (verifique Security Group)"
-      - name: Diagnóstico via SSM
-        run: |
-          CID=$(aws ssm send-command --instance-ids ${{ steps.inst.outputs.instance_id }} --document-name "AWS-RunShellScript" \
-            --parameters '{"commands":["uptime","systemctl is-active k3s 2>/dev/null||echo N/A","sudo kubectl get nodes 2>/dev/null||echo kubectl-fail"]}' \
-            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
-          [ -z "$CID" ] && { echo "SSM não disponível"; exit 0; }
-          sleep 6
-          aws ssm get-command-invocation --command-id "$CID" --instance-id ${{ steps.inst.outputs.instance_id }} --query '[Status,StandardOutputContent]' --output text 2>/dev/null || true
-      - name: Diagnóstico via SSH
-        if: steps.inst.outputs.public_ip != '' && steps.inst.outputs.public_ip != 'None'
-        continue-on-error: true
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ steps.inst.outputs.public_ip }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          timeout: 15s
-          script: |
-            echo "--- K3s status ---"
-            sudo systemctl status k3s --no-pager 2>/dev/null | head -20
-            echo "--- kubectl get nodes ---"
-            sudo kubectl get nodes 2>/dev/null || true
-            echo "--- cloud-init tail ---"
-            sudo tail -50 /var/log/cloud-init-output.log 2>/dev/null || true
+      - uses: actions/checkout@v4
+      - run: |
+          curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+      - run: |
+          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+          echo "Cluster: $CLUSTER"
+          aws eks update-kubeconfig --region us-east-1 --name "$CLUSTER"
+          echo "--- Nodes ---"
+          kubectl get nodes -o wide
+          echo "--- Pods ---"
+          kubectl get pods -A
+          echo "--- Services ---"
+          kubectl get svc -n oficinapro-prod 2>/dev/null || true
 
-  compute:
-    name: '3. Terraform Compute - K3s Cluster'
+  eks:
+    name: '3. Terraform EKS Cluster'
     needs: [databases, messaging]
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.action != 'debug'
     runs-on: ubuntu-latest
-    outputs:
-      k3s_master_ip: ${{ steps.outputs.outputs.master_ip }}
-      alb_dns: ${{ steps.outputs.outputs.alb_dns }}
-      cluster_status: ${{ steps.verify_cluster.outputs.status }}
+    defaults:
+      run:
+        working-directory: ./fase4/05-eks
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
-      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-
-    defaults:
-      run:
-        working-directory: ./fase4/04-compute
 
     steps:
     - name: Checkout
@@ -184,174 +134,43 @@ jobs:
         terraform_version: 1.5.0
 
     - name: Terraform Init
-      run: |
-        echo "🔄 Inicializando Terraform..."
-        terraform init
-        echo "✅ Terraform inicializado"
-
-    - name: Terraform Validate
-      run: |
-        echo "✅ Validando configuração..."
-        terraform validate
-
-    - name: Terraform Plan
-      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
-      run: |
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔍 PLANEJANDO INFRAESTRUTURA K3S (FASE 4)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        terraform plan -out=tfplan
+      run: terraform init
 
     - name: Terraform Apply
       if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
-      id: apply
       run: |
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🚀 APLICANDO INFRAESTRUTURA K3S"
+        echo "🚀 APLICANDO EKS CLUSTER (Fase 4)"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        terraform apply -auto-approve tfplan
-        echo "✅ Terraform apply concluído!"
+        terraform apply -auto-approve
+        echo "✅ EKS criado! Cluster: $(terraform output -raw cluster_name)"
 
-    - name: Capture Outputs
-      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
-      id: outputs
-      run: |
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📊 OUTPUTS DA INFRAESTRUTURA"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        
-        MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || echo "")
-        ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
-        
-        echo "master_ip=$MASTER_IP" >> $GITHUB_OUTPUT
-        echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
-        
-        echo ""
-        echo "🖥️  Master Node IP: $MASTER_IP"
-        echo "🌐 ALB DNS: $ALB_DNS"
-        echo ""
-        
-        # Salvar Master IP no Parameter Store para outros workflows
-        aws ssm put-parameter --name "/oficinapro/k3s/master-ip" --value "$MASTER_IP" --type "String" --overwrite --region us-east-1
-        
-        echo "💾 Master IP salvo no AWS Parameter Store"
-
-    - name: Setup SSH Key
+    - name: Configure kubectl e Verificar Cluster
       if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       run: |
-        echo "🔐 Configurando chave SSH..."
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > chave_nova
-        echo "" >> chave_nova
-        chmod 600 chave_nova
-      shell: bash
-
-    - name: Verify K3s Cluster
-      if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
-      id: verify_cluster
-      run: |
+        curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl && sudo mv kubectl /usr/local/bin/
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔍 VERIFICANDO CLUSTER K3S"
+        echo "🔍 VERIFICANDO EKS"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        
-        MASTER_IP=$(terraform output -raw k3s_master_public_ip)
-        INSTANCE_ID=$(terraform output -raw k3s_instance_id)
-        
-        echo "⏳ Polling: Parameter Store /oficinapro/k3s/bootstrap-status"
-        echo "   (user_data grava status a cada etapa - não depende de SSH/SSM)"
-        echo "   Esperando 90s antes da 1ª tentativa..."
-        sleep 90
-        
-        for i in {1..30}; do
-          echo "Tentativa $i/30..."
-          
-          # 1) Parameter Store (método principal - user_data grava status)
-          STATUS=$(aws ssm get-parameter --name "/oficinapro/k3s/bootstrap-status" --query "Parameter.Value" --output text 2>/dev/null || echo "")
-          [ -n "$STATUS" ] && echo "   bootstrap-status: $STATUS"
-          if [ "$STATUS" = "complete" ] || [ "$STATUS" = "k3s_ready" ]; then
+        CLUSTER_NAME=$(terraform output -raw cluster_name)
+        echo "Cluster: $CLUSTER_NAME"
+        echo "Aguardando nodes ficarem Ready (~2 min)..."
+        for i in {1..12}; do
+          aws eks update-kubeconfig --region us-east-1 --name "$CLUSTER_NAME"
+          if kubectl get nodes 2>/dev/null | grep -q Ready; then
             echo ""
-            echo "✅ Cluster K3s operacional! (status=$STATUS)"
-            echo "status=ready" >> $GITHUB_OUTPUT
+            kubectl get nodes
+            echo ""
+            echo "✅ EKS operacional!"
             exit 0
           fi
-          
-          # 2) SSH (quando porta 22 acessível)
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes -i chave_nova ubuntu@${MASTER_IP} "sudo kubectl get nodes" 2>/dev/null; then
-            echo ""
-            echo "✅ Cluster K3s operacional (via SSH)!"
-            echo "status=ready" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # 3) SSM Run Command (fallback)
-          CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --parameters '{"commands":["sudo kubectl get nodes 2>/dev/null || echo FAIL"]}' \
-            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
-          if [ -n "$CID" ]; then
-            sleep 12
-            OUT=$(aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text 2>/dev/null | tr -d '\r')
-            echo "$OUT" | grep -q "Ready" && echo "✅ Cluster OK (via SSM)!" && echo "status=ready" >> $GITHUB_OUTPUT && exit 0
-          fi
-          
+          echo "Tentativa $i/12..."
           sleep 20
         done
-        
-        echo "⚠️  Timeout. Verifique /oficinapro/k3s/bootstrap-status no Parameter Store"
-        echo "status=pending" >> $GITHUB_OUTPUT
-
-    - name: Debug K3s (opcional - marque run_debug no dispatch)
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_debug == 'true'
-      run: |
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔍 DIAGNÓSTICO K3S (run_debug=true)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        MASTER_IP=$(terraform output -raw k3s_master_public_ip 2>/dev/null || aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text 2>/dev/null)
-        INSTANCE_ID=$(terraform output -raw k3s_instance_id 2>/dev/null || aws ec2 describe-instances --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null)
-        echo "IP: $MASTER_IP | Instance: $INSTANCE_ID"
-        echo "--- Bootstrap status (Parameter Store) ---"
-        aws ssm get-parameter --name "/oficinapro/k3s/bootstrap-status" --query "Parameter.Value" --output text 2>/dev/null || echo "não existe ainda"
-        echo "--- SSM Fleet Manager (instância registrada?) ---"
-        aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --query 'InstanceInformationList[0].[PingStatus,AgentVersion,RegistrationDate]' --output text 2>/dev/null || echo "Instância NÃO aparece no Fleet Manager (Undeliverable)"
-        echo "--- Security Group ingress ---"
-        for sg in $(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text); do
-          aws ec2 describe-security-groups --group-ids $sg --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`]' --output table 2>/dev/null || true
-        done
-        echo "--- Console Output ---"
-        aws ec2 get-console-output --instance-id "$INSTANCE_ID" --query 'Output' --output text 2>/dev/null | tail -60
-        echo "--- Teste porta 22 ---"
-        nc -zv -w 10 "$MASTER_IP" 22 2>&1 || echo "Porta 22 inacessível (use SSM para Verify)"
-        echo "--- SSM diagnóstico ---"
-        SSM_ERR=$(mktemp)
-        CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" \
-          --parameters '{"commands":["echo K3S_ACTIVE && (systemctl is-active k3s 2>/dev/null || echo inactive)","echo KUBECTL && (sudo kubectl get nodes 2>/dev/null || echo kubectl-fail)"]}' \
-          --timeout-seconds 90 --output text --query "Command.CommandId" 2>"$SSM_ERR")
-        if [ -z "$CID" ]; then
-          echo "❌ send-command falhou:"
-          cat "$SSM_ERR"
-        else
-          echo "CommandId: $CID - aguardando 15s..."
-          sleep 15
-          echo "--- Status/Output ---"
-          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'Status' --output text
-          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StatusDetails' --output text 2>/dev/null || true
-          echo "--- Stdout ---"
-          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text 2>/dev/null || true
-          echo "--- Stderr ---"
-          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text 2>/dev/null || true
-          echo "--- Comando simples (whoami + k3s check) ---"
-          CID2=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name "AWS-RunShellScript" \
-            --parameters '{"commands":["whoami","test -f /usr/local/bin/kubectl && echo kubectl-OK || echo kubectl-NOT-FOUND","systemctl is-active k3s 2>/dev/null || echo k3s-not-running"]}' \
-            --timeout-seconds 30 --output text --query "Command.CommandId" 2>/dev/null)
-          [ -n "$CID2" ] && sleep 8 && aws ssm get-command-invocation --command-id "$CID2" --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text
-        fi
-        rm -f "$SSM_ERR"
+        echo "⚠️ Nodes ainda não Ready - cluster pode estar inicializando"
+        kubectl get nodes 2>/dev/null || true
 
     - name: Terraform Destroy
-      if: ${{ github.event.inputs.action == 'destroy' }}
-      run: |
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🗑️  DESTRUINDO INFRAESTRUTURA K3S"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        terraform destroy -auto-approve
-        echo "✅ Infraestrutura destruída!"
+      if: github.event.inputs.action == 'destroy'
+      run: terraform destroy -auto-approve

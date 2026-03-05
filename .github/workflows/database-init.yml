@@ -1,6 +1,6 @@
 # Database Init - Cria databases lógicos no RDS consolidado
-# Sequência: App Infra CI/CD (success) → database-init → deploys dos serviços
-# Métodos: 1) kubectl (se kubeconfig disponível), 2) SSM, 3) SSH (fallback)
+# Sequência: App Infra CI/CD (EKS success) → database-init → deploys dos serviços
+# Usa EKS: aws eks update-kubeconfig + kubectl
 
 name: 'OficinaPro - Database Initialization'
 
@@ -32,84 +32,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: 'Buscar Endpoints da Infraestrutura'
+      - name: 'Buscar RDS e Configurar kubectl (EKS)'
         id: infra
         run: |
-          echo "🔍 Buscando endpoints..."
-          
-          # RDS Endpoint (prioridade: consolidated-db)
-          RDS_HOST=$(aws rds describe-db-instances \
-            --db-instance-identifier oficinapro-consolidated-db \
-            --query 'DBInstances[0].Endpoint.Address' \
-            --output text 2>/dev/null || echo "")
-          
-          if [ -z "$RDS_HOST" ] || [ "$RDS_HOST" == "None" ]; then
-            RDS_HOST=$(aws rds describe-db-instances \
-              --query 'DBInstances[?DBInstanceStatus==`available`].Endpoint.Address | [0]' \
-              --output text 2>/dev/null || echo "")
-          fi
-          
-          if [ -z "$RDS_HOST" ] || [ "$RDS_HOST" == "None" ]; then
-            echo "::error::RDS não encontrado"
-            exit 1
-          fi
+          RDS_HOST=$(aws rds describe-db-instances --db-instance-identifier oficinapro-consolidated-db --query 'DBInstances[0].Endpoint.Address' --output text 2>/dev/null || echo "")
+          [ -z "$RDS_HOST" ] || [ "$RDS_HOST" == "None" ] && RDS_HOST=$(aws rds describe-db-instances --query 'DBInstances[?DBInstanceStatus==`available`].Endpoint.Address | [0]' --output text 2>/dev/null || echo "")
+          [ -z "$RDS_HOST" ] || [ "$RDS_HOST" == "None" ] && { echo "::error::RDS não encontrado"; exit 1; }
           echo "rds_host=${RDS_HOST}" >> $GITHUB_OUTPUT
           echo "✅ RDS: ${RDS_HOST}"
-          
-          # K3s Master IP (Parameter Store → EC2)
-          MASTER_IP=$(aws ssm get-parameter --name "/oficinapro/k3s/master-ip" --query "Parameter.Value" --output text 2>/dev/null || echo "")
-          if [ -z "$MASTER_IP" ] || [ "$MASTER_IP" == "None" ]; then
-            MASTER_IP=$(aws ec2 describe-instances \
-              --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" \
-              --query "Reservations[0].Instances[0].PublicIpAddress" \
-              --output text 2>/dev/null || echo "")
-          fi
-          if [ -z "$MASTER_IP" ] || [ "$MASTER_IP" == "None" ]; then
-            MASTER_IP=$(aws ec2 describe-instances \
-              --filters "Name=tag:Name,Values=*k3s*" "Name=instance-state-name,Values=running" \
-              --query "Reservations[0].Instances[0].PublicIpAddress" \
-              --output text 2>/dev/null || echo "")
-          fi
-          echo "master_ip=${MASTER_IP}" >> $GITHUB_OUTPUT
-          
-          # Instance ID (para SSM)
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Role,Values=master" "Name=instance-state-name,Values=running" \
-            --query "Reservations[0].Instances[0].InstanceId" \
-            --output text 2>/dev/null || echo "")
-          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
-            INSTANCE_ID=$(aws ec2 describe-instances \
-              --filters "Name=tag:Name,Values=*k3s*" "Name=instance-state-name,Values=running" \
-              --query "Reservations[0].Instances[0].InstanceId" \
-              --output text 2>/dev/null || echo "")
-          fi
-          echo "instance_id=${INSTANCE_ID}" >> $GITHUB_OUTPUT
-          
-          echo "✅ Master IP: ${MASTER_IP} | Instance: ${INSTANCE_ID}"
-
-      - name: 'Verificar Kubeconfig no Parameter Store'
-        id: kubeconfig
-        run: |
-          if aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text 2>/dev/null | head -c 50 | grep -q "apiVersion"; then
-            echo "available=true" >> $GITHUB_OUTPUT
-            echo "✅ Kubeconfig encontrado - usando kubectl"
-          else
-            echo "available=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Kubeconfig não encontrado - usando SSM ou SSH"
-          fi
-
-      # --- MÉTODO 1: kubectl (sem SSH, requer Bootstrap Kubeconfig prévio) ---
-      - name: 'Init via kubectl - Aplicar Job'
-        if: steps.kubeconfig.outputs.available == 'true'
-        run: |
-          echo "📋 Método: kubectl (Kubeconfig do Parameter Store)"
-          aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text > /tmp/kubeconfig.yaml
-          chmod 600 /tmp/kubeconfig.yaml
-          export KUBECONFIG=/tmp/kubeconfig.yaml
-          
+          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER"
           curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-          
+          kubectl get nodes || { echo "::error::EKS cluster não acessível"; exit 1; }
+
+      - name: 'Init Databases - Job no EKS'
+        run: |
+          echo "📋 Init via kubectl (EKS)"
           kubectl create namespace oficinapro-prod --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic db-init-secret --from-literal=password="${{ secrets.DB_PASSWORD }}" -n oficinapro-prod --dry-run=client -o yaml | kubectl apply -f -
           
@@ -153,74 +92,6 @@ jobs:
           kubectl wait --for=condition=complete job/db-init-job -n oficinapro-prod --timeout=180s
           kubectl logs job/db-init-job -n oficinapro-prod
           kubectl delete secret db-init-secret -n oficinapro-prod --ignore-not-found
-
-      # --- MÉTODO 2: SSM (evita SSH) ---
-      - name: 'Init via SSM Run Command'
-        if: steps.kubeconfig.outputs.available != 'true' && steps.infra.outputs.instance_id != '' && steps.infra.outputs.instance_id != 'None'
-        run: |
-          echo "📋 Método: SSM (evita SSH)"
-          INSTANCE_ID="${{ steps.infra.outputs.instance_id }}"
-          RDS_HOST="${{ steps.infra.outputs.rds_host }}"
-          
-          SCRIPT_B64=$(echo 'set -e
-          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-          export PGPASSWORD="DB_PASSWORD_PLACEHOLDER"
-          for db in customer_db billing_db execution_db saga_db payment_db; do
-            if ! sudo kubectl run db-check-\$db --rm -i --restart=Never --image=postgres:15-alpine -- psql -h RDS_HOST_PLACEHOLDER -U oficinapro_admin -d os_db -tc "SELECT 1 FROM pg_database WHERE datname = '\''\$db'\''" 2>/dev/null | grep -q 1; then
-              sudo kubectl run db-create-\$db --rm -i --restart=Never --image=postgres:15-alpine --env=PGPASSWORD=\$PGPASSWORD -- psql -h RDS_HOST_PLACEHOLDER -U oficinapro_admin -d os_db -c "CREATE DATABASE \$db"
-            fi
-          done
-          echo "✅ Databases criados"' | sed "s|DB_PASSWORD_PLACEHOLDER|${{ secrets.DB_PASSWORD }}|g" | sed "s|RDS_HOST_PLACEHOLDER|${RDS_HOST}|g" | base64 -w0)
-          
-          CMD="echo '${SCRIPT_B64}' | base64 -d | bash"
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --parameters "{\"commands\":[\"$CMD\"]}" \
-            --timeout-seconds 300 \
-            --output text \
-            --query "Command.CommandId")
-          
-          echo "Aguardando comando SSM $COMMAND_ID..."
-          for i in $(seq 1 40); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query 'Status' --output text 2>/dev/null || echo "Pending")
-            case "$STATUS" in
-              Success) echo "✅ SSM OK"; break ;;
-              Failed|Cancelled) aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"; exit 1 ;;
-              *) sleep 10 ;;
-            esac
-            [ $i -eq 40 ] && { echo "Timeout"; exit 1; }
-          done
-
-      # --- MÉTODO 3: SSH (fallback quando não tem kubeconfig nem instance_id para SSM) ---
-      - name: 'Init via SSH (fallback)'
-        if: steps.kubeconfig.outputs.available != 'true' && (steps.infra.outputs.instance_id == '' || steps.infra.outputs.instance_id == 'None') && steps.infra.outputs.master_ip != '' && steps.infra.outputs.master_ip != 'None'
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ steps.infra.outputs.master_ip }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          timeout: 120s
-          command_timeout: 5m
-          envs: DB_PASSWORD
-          script: |
-            export KUBECONFIG=~/.kube/config
-            [ -f /etc/rancher/k3s/k3s.yaml ] && sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config 2>/dev/null; sudo chown ubuntu:ubuntu ~/.kube/config 2>/dev/null
-            DB_HOST="${{ steps.infra.outputs.rds_host }}"
-            for db in customer_db billing_db execution_db saga_db payment_db; do
-              sudo kubectl run db-init-$db --rm -i --restart=Never --image=postgres:15-alpine --env=PGPASSWORD="${DB_PASSWORD}" -- psql -h $DB_HOST -U oficinapro_admin -d os_db -c "CREATE DATABASE $db" 2>/dev/null || echo "DB $db já existe"
-            done
-            echo "✅ Database init completo"
-
-      - name: 'Validar conexão disponível'
-        if: steps.kubeconfig.outputs.available != 'true'
-        run: |
-          ID="${{ steps.infra.outputs.instance_id }}"
-          IP="${{ steps.infra.outputs.master_ip }}"
-          if [ -z "$ID" ] || [ "$ID" == "None" ] && { [ -z "$IP" ] || [ "$IP" == "None" ]; }; then
-            echo "::error::K3s não encontrado. Rode 'Bootstrap Kubeconfig' (OficinaPro-Customer) ou verifique se App Infra concluiu."
-            exit 1
-          fi
 
       - name: 'Resumo'
         if: always()

@@ -1,8 +1,7 @@
-# Debug K3s Cluster - Diagnóstico quando a instância não fica disponível
+# LEGADO - App Infra usa EKS. Use action=debug no App Infra para diagnóstico EKS.
 # Execução: manual (workflow_dispatch)
-# Rode após App Infra CI/CD quando "Verify K3s Cluster" falhar
 
-name: 'Debug - K3s Cluster (Por que não fica pronto?)'
+name: 'Debug - K3s Cluster (Legado)'
 
 on:
   workflow_dispatch:
