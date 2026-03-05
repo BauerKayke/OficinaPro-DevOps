@@ -23,9 +23,9 @@ variable "cluster_name" {
 }
 
 variable "kubernetes_version" {
-  description = "Kubernetes version (EKS suporta 1.31+; 1.28 descontinuado - sem AMI)"
+  description = "Kubernetes version (EKS: upgrade 1 minor por vez; 1.28 sem AMI)"
   type        = string
-  default     = "1.32"
+  default     = "1.29"
 }
 
 variable "node_instance_types" {
