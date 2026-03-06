@@ -73,10 +73,10 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# Security Group K3s
+# Security Group K3s (sufixo -cluster para não conflitar com 04-compute)
 resource "aws_security_group" "k3s" {
-  name        = "${var.project_name}-k3s-sg-fase4"
-  description = "K3s cluster - API, SSH, NodePort"
+  name        = "${var.project_name}-k3s-cluster-sg-fase4"
+  description = "K3s cluster 06 - API, SSH, NodePort"
   vpc_id      = data.terraform_remote_state.network.outputs.vpc_id
 
   ingress {
@@ -113,12 +113,12 @@ resource "aws_security_group" "k3s" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  tags = { Name = "${var.project_name}-k3s-sg-fase4" }
+  tags = { Name = "${var.project_name}-k3s-cluster-sg-fase4" }
 }
 
-# IAM Role K3s
+# IAM Role K3s (sufixo -cluster para não conflitar com 04-compute)
 resource "aws_iam_role" "k3s" {
-  name = "${var.project_name}-k3s-role-fase4"
+  name = "${var.project_name}-k3s-cluster-role-fase4"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -140,7 +140,7 @@ resource "aws_iam_role_policy_attachment" "k3s_sqs" {
 }
 
 resource "aws_iam_role_policy" "k3s_ssm_param" {
-  name = "${var.project_name}-k3s-ssm-param"
+  name = "${var.project_name}-k3s-cluster-ssm-param"
   role = aws_iam_role.k3s.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -153,7 +153,7 @@ resource "aws_iam_role_policy" "k3s_ssm_param" {
 }
 
 resource "aws_iam_instance_profile" "k3s" {
-  name = "${var.project_name}-k3s-profile-fase4"
+  name = "${var.project_name}-k3s-cluster-profile-fase4"
   role = aws_iam_role.k3s.name
 }
 
