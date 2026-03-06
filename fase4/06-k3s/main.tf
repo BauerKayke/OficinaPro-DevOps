@@ -229,8 +229,9 @@ resource "aws_instance" "k3s_agent" {
 
 # SSM Parameters para pipelines
 resource "aws_ssm_parameter" "master_ip" {
-  name  = "/oficinapro/k3s/master-ip"
-  type  = "String"
-  value = aws_eip.k3s_server.public_ip
-  tags  = { Phase = "Fase4-K3s" }
+  name      = "/oficinapro/k3s/master-ip"
+  type      = "String"
+  value     = aws_eip.k3s_server.public_ip
+  overwrite = true
+  tags      = { Phase = "Fase4-K3s" }
 }
