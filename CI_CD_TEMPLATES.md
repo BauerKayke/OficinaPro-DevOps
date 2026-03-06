@@ -361,6 +361,96 @@ management.otlp.metrics.export.step=60s
 management.otlp.metrics.export.headers.api-key=${NEW_RELIC_LICENSE_KEY:}
 ```
 
+## 6. ECS Deploy (Fase 4 - 2x t3.micro)
+
+Cluster ECS com 2 instâncias, controle de memória por task. Substitua `{SERVICE_NAME}`, `{PORT}`, `{IMAGE}`.
+
+### 6.1 Buscar Cluster ECS
+
+```yaml
+- name: 'Buscar ECS Cluster'
+  id: ecs-discovery
+  run: |
+    CLUSTER=$(aws ssm get-parameter --name "/oficinapro/ecs/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+    echo "cluster=${CLUSTER}" >> $GITHUB_OUTPUT
+    echo "✅ Cluster ECS: $CLUSTER"
+```
+
+### 6.2 Task Definition (memória controlada - Free Tier)
+
+```json
+{
+  "family": "{SERVICE_NAME}",
+  "networkMode": "bridge",
+  "requiresCompatibilities": ["EC2"],
+  "cpu": "128",
+  "memory": "192",
+  "containerDefinitions": [
+    {
+      "name": "{SERVICE_NAME}",
+      "image": "{IMAGE}",
+      "memory": 192,
+      "memoryReservation": 64,
+      "portMappings": [{"containerPort": {PORT}, "hostPort": 0}],
+      "environment": [
+        {"name": "SPRING_PROFILES_ACTIVE", "value": "prod"},
+        {"name": "AWS_REGION", "value": "us-east-1"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/{SERVICE_NAME}",
+          "awslogs-region": "us-east-1"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:{PORT}/actuator/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ]
+}
+```
+
+### 6.3 Pipeline Deploy ECS
+
+```yaml
+- name: 'Registrar Task Definition'
+  id: register-task
+  run: |
+    CLUSTER=${{ steps.ecs-discovery.outputs.cluster }}
+    # Criar task-def.json com sed (evitar YAML/JSON parse)
+    sed -e "s|{SERVICE_NAME}|${{ env.SERVICE_NAME }}|g" \
+        -e "s|{PORT}|${{ env.PORT }}|g" \
+        -e "s|{IMAGE}|${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ env.SERVICE_NAME }}:${{ github.sha }}|g" \
+        task-def.json > task-def-out.json
+    aws ecs register-task-definition --cli-input-json file://task-def-out.json
+    TASK_ARN=$(aws ecs describe-task-definition --task-definition ${{ env.SERVICE_NAME }} --query 'taskDefinition.taskDefinitionArn' --output text)
+    echo "task_arn=${TASK_ARN}" >> $GITHUB_OUTPUT
+
+- name: 'Atualizar ECS Service'
+  run: |
+    aws ecs update-service \
+      --cluster ${{ steps.ecs-discovery.outputs.cluster }} \
+      --service ${{ env.SERVICE_NAME }} \
+      --task-definition ${{ env.SERVICE_NAME }} \
+      --force-new-deployment
+```
+
+### 6.4 Memória por serviço (2 instâncias × ~768Mi disponível)
+
+| Serviço           | memory | memoryReservation |
+|-------------------|--------|-------------------|
+| saga-orchestrator | 192    | 64                |
+| billing           | 192    | 64                |
+| execution         | 192    | 64                |
+| customer          | 192    | 64                |
+| payment           | 128    | 64                |
+| core-domain       | 192    | 64                |
+
 ---
 
 **Como usar estes templates**:

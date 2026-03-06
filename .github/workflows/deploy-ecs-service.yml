@@ -1,0 +1,150 @@
+# Workflow reutilizável para deploy de serviços no ECS (Fase 4)
+# Chamado por: saga-orchestrator, billing, execution, customer, payment, core-domain
+#
+# Uso nos repositórios de serviço:
+#   jobs:
+#     deploy-to-ecs:
+#       uses: OficinaPro-DevOps/.github/workflows/deploy-ecs-service.yml@main
+#       with:
+#         service_name: saga-orchestrator
+#         image: ghcr.io/${{ env.IMAGE_OWNER }}/saga-orchestrator:${{ github.sha }}
+#         port: "8084"
+#         health_path: /actuator/health
+#         env_json: ${{ steps.build-env.outputs.env_json }}
+#       secrets: inherit
+
+name: Deploy ECS Service (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Nome do serviço ECS (ex: saga-orchestrator, billing)'
+        required: true
+        type: string
+      image:
+        description: 'Imagem Docker completa (ex: ghcr.io/owner/saga-orchestrator:sha)'
+        required: true
+        type: string
+      port:
+        description: 'Porta do container'
+        required: true
+        type: string
+      health_path:
+        description: 'Path do health check (ex: /actuator/health ou /health)'
+        required: true
+        type: string
+        default: '/actuator/health'
+      memory:
+        description: 'Memória em MB'
+        required: false
+        type: string
+        default: '192'
+      env_json:
+        description: 'JSON array de environment variables [{"name":"X","value":"Y"}]'
+        required: false
+        type: string
+        default: '[]'
+    secrets:
+      db_password:
+        description: 'DB_PASSWORD (opcional)'
+        required: false
+      new_relic_license_key:
+        description: 'NEW_RELIC_LICENSE_KEY (opcional)'
+        required: false
+      aws_access_key_id:
+        description: 'AWS_ACCESS_KEY_ID (opcional, para task)'
+        required: false
+      aws_secret_access_key:
+        description: 'AWS_SECRET_ACCESS_KEY (opcional, para task)'
+        required: false
+      mp_token:
+        description: 'MP_ACCESS_TOKEN (Payment - opcional)'
+        required: false
+
+jobs:
+  deploy:
+    name: 'Deploy ${{ inputs.service_name }} no ECS'
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+
+    steps:
+      - name: 'Configurar AWS'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 'Buscar Cluster e Role'
+        id: ecs
+        run: |
+          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/ecs/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+          ROLE=$(aws ssm get-parameter --name "/oficinapro/ecs/task-execution-role-arn" --query "Parameter.Value" --output text 2>/dev/null || echo "")
+          echo "cluster=${CLUSTER}" >> $GITHUB_OUTPUT
+          echo "role=${ROLE}" >> $GITHUB_OUTPUT
+          echo "✅ Cluster: $CLUSTER"
+
+      - name: 'Registrar Task Definition'
+        run: |
+          CLUSTER="${{ steps.ecs.outputs.cluster }}"
+          ROLE="${{ steps.ecs.outputs.role }}"
+          ENV_JSON='${{ inputs.env_json }}'
+          [ "$ENV_JSON" = "[]" ] || [ -z "$ENV_JSON" ] && ENV_JSON="[]"
+
+          jq -n \
+            --arg family "${{ inputs.service_name }}" \
+            --arg image "${{ inputs.image }}" \
+            --arg port "${{ inputs.port }}" \
+            --arg health "${{ inputs.health_path }}" \
+            --arg memory "${{ inputs.memory }}" \
+            --arg role "$ROLE" \
+            --argjson env "$ENV_JSON" \
+            '{
+              family: $family,
+              networkMode: "bridge",
+              requiresCompatibilities: ["EC2"],
+              cpu: "128",
+              memory: $memory,
+              executionRoleArn: $role,
+              containerDefinitions: [{
+                name: $family,
+                image: $image,
+                memory: ($memory | tonumber),
+                memoryReservation: 64,
+                essential: true,
+                portMappings: [{containerPort: ($port | tonumber), hostPort: 0, protocol: "tcp"}],
+                environment: $env,
+                logConfiguration: {
+                  logDriver: "awslogs",
+                  options: {"awslogs-group": ("/ecs/" + $family), "awslogs-region": "us-east-1"}
+                },
+                healthCheck: {
+                  command: ["CMD-SHELL", ("curl -f http://localhost:" + $port + $health + " || exit 1")],
+                  interval: 30,
+                  timeout: 5,
+                  retries: 3,
+                  startPeriod: 60
+                }
+              }]
+            }' > task-def.json
+
+          aws ecs register-task-definition --cli-input-json file://task-def.json
+          echo "✅ Task definition registrada"
+
+      - name: 'Atualizar ECS Service'
+        run: |
+          aws ecs update-service \
+            --cluster ${{ steps.ecs.outputs.cluster }} \
+            --service ${{ inputs.service_name }} \
+            --task-definition ${{ inputs.service_name }} \
+            --force-new-deployment
+          echo "✅ Deploy iniciado!"
+
+      - name: 'Aguardar estabilização'
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ steps.ecs.outputs.cluster }} \
+            --services ${{ inputs.service_name }} \
+            || echo "⚠️ Timeout ou serviço ainda estabilizando"

@@ -17,7 +17,7 @@ on:
       - main
       - master
     paths:
-      - 'fase4/05-eks/**'
+      - 'fase4/06-ecs/**'
       - 'fase4-optimized/databases/**'
       - 'fase4-optimized/messaging/**'
       - '.github/workflows/app-infra.yml'
@@ -86,8 +86,8 @@ jobs:
       run: terraform destroy -auto-approve
       working-directory: ./fase4-optimized/messaging
 
-  debug-eks:
-    name: '🔍 Debug EKS'
+  debug-ecs:
+    name: '🔍 Debug ECS'
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'debug'
     env:
@@ -97,27 +97,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-      - run: |
-          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
-          echo "Cluster: $CLUSTER"
-          aws eks update-kubeconfig --region us-east-1 --name "$CLUSTER"
-          echo "--- Nodes ---"
-          kubectl get nodes -o wide
-          echo "--- Pods ---"
-          kubectl get pods -A
+          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/ecs/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+          echo "Cluster ECS: $CLUSTER"
+          echo "--- Container Instances ---"
+          aws ecs list-container-instances --cluster "$CLUSTER" --output table
           echo "--- Services ---"
-          kubectl get svc -n oficinapro-prod 2>/dev/null || true
+          aws ecs list-services --cluster "$CLUSTER" --output table
+          echo "--- Tasks ---"
+          aws ecs list-tasks --cluster "$CLUSTER" --output table
 
-  eks:
-    name: '3. Terraform EKS Cluster'
+  ecs:
+    name: '3. Terraform ECS Cluster (2x t3.micro)'
     needs: [databases, messaging]
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.action != 'debug'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./fase4/05-eks
+        working-directory: ./fase4/06-ecs
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -140,37 +136,67 @@ jobs:
       if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       run: |
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🚀 APLICANDO EKS CLUSTER (Fase 4)"
+        echo "🚀 APLICANDO ECS CLUSTER (Fase 4 - 2x t3.micro)"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         terraform apply -auto-approve
-        echo "✅ EKS criado! Cluster: $(terraform output -raw cluster_name)"
+        echo "✅ ECS criado! Cluster: $(terraform output -raw cluster_name)"
 
-    - name: Configure kubectl e Verificar Cluster
+    - name: Verificar ECS e Container Instances
       if: ${{ github.event.inputs.action == 'apply' || github.event_name == 'push' }}
       run: |
-        curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-        chmod +x kubectl && sudo mv kubectl /usr/local/bin/
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "🔍 VERIFICANDO EKS"
+        echo "🔍 VERIFICANDO ECS"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        CLUSTER_NAME=$(terraform output -raw cluster_name)
-        echo "Cluster: $CLUSTER_NAME"
-        echo "Aguardando nodes ficarem Ready (~2 min)..."
-        for i in {1..12}; do
-          aws eks update-kubeconfig --region us-east-1 --name "$CLUSTER_NAME"
-          if kubectl get nodes 2>/dev/null | grep -q Ready; then
+        CLUSTER=$(terraform output -raw cluster_name)
+        echo "Cluster: $CLUSTER"
+        echo "Aguardando container instances (~3 min)..."
+        for i in {1..15}; do
+          COUNT=$(aws ecs describe-clusters --clusters "$CLUSTER" --query 'clusters[0].registeredContainerInstancesCount' --output text 2>/dev/null || echo "0")
+          echo "Tentativa $i/15 - Instâncias registradas: $COUNT"
+          if [ "$COUNT" = "2" ]; then
             echo ""
-            kubectl get nodes
+            aws ecs list-container-instances --cluster "$CLUSTER" --output table
             echo ""
-            echo "✅ EKS operacional!"
+            echo "✅ ECS operacional! 2 instâncias prontas."
             exit 0
           fi
-          echo "Tentativa $i/12..."
           sleep 20
         done
-        echo "⚠️ Nodes ainda não Ready - cluster pode estar inicializando"
-        kubectl get nodes 2>/dev/null || true
+        echo "⚠️ Instâncias ainda registrando - aguarde mais alguns minutos"
+        aws ecs list-container-instances --cluster "$CLUSTER" --output table 2>/dev/null || true
 
     - name: Terraform Destroy
       if: github.event.inputs.action == 'destroy'
       run: terraform destroy -auto-approve
+
+  eks-destroy:
+    name: '4. Terraform EKS Destroy (evitar custos)'
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'destroy'
+    defaults:
+      run:
+        working-directory: ./fase4/05-eks
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.0
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Terraform Destroy (EKS)
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🗑️ DESTRUINDO EKS CLUSTER (evitar custos)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        terraform destroy -auto-approve || echo "⚠️ EKS já destruído ou state inexistente"
