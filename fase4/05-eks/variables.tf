@@ -29,9 +29,9 @@ variable "kubernetes_version" {
 }
 
 variable "node_instance_types" {
-  description = "EC2 instance types for node group"
+  description = "EC2 instance types for node group (t3.micro = Free Tier eligible)"
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.micro"]
 }
 
 variable "desired_size" {
