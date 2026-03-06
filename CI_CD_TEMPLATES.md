@@ -361,9 +361,62 @@ management.otlp.metrics.export.step=60s
 management.otlp.metrics.export.headers.api-key=${NEW_RELIC_LICENSE_KEY:}
 ```
 
-## 6. ECS Deploy (Fase 4 - 2x t3.micro)
+## 6. K3s Deploy (Fase 4 - 2x t3.micro)
 
-Cluster ECS com 2 instâncias, controle de memória por task. Substitua `{SERVICE_NAME}`, `{PORT}`, `{IMAGE}`.
+**K3s** = versão mais leve de Kubernetes em EC2. Requisito: manter Kubernetes no cluster.
+
+### 6.1 Infraestrutura (Terraform fase4/06-k3s)
+
+- 2x t3.micro: 1 server + 1 agent
+- SSM: `/oficinapro/k3s/master-ip`, `/oficinapro/k3s/kubeconfig`
+- Namespace: `oficinapro-prod`
+
+### 6.2 Pipeline Deploy K3s (passos essenciais)
+
+```yaml
+- name: 'Instalar kubectl'
+  run: |
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+- name: 'Configurar kubeconfig (K3s)'
+  run: |
+    KUBECONFIG=$(aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
+    if [ -z "$KUBECONFIG" ]; then
+      echo "::error::K3s kubeconfig não encontrado. Execute o App Infra primeiro."
+      exit 1
+    fi
+    mkdir -p ~/.kube
+    echo "$KUBECONFIG" > ~/.kube/config
+    chmod 600 ~/.kube/config
+    echo "KUBECONFIG=~/.kube/config" >> $GITHUB_ENV
+
+- name: 'Criar imagePullSecret (GHCR)'
+  run: |
+    kubectl create secret docker-registry ghcr-secret \
+      --docker-server=ghcr.io \
+      --docker-username=${{ github.actor }} \
+      --docker-password=${{ secrets.GITHUB_TOKEN }} \
+      --namespace=oficinapro-prod \
+      --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 6.3 Memória por serviço (2 nós × ~768Mi disponível)
+
+| Serviço           | memory | porta |
+|-------------------|--------|-------|
+| saga-orchestrator | 192    | 8084  |
+| billing           | 192    | 8081  |
+| execution         | 192    | 8083  |
+| customer          | 192    | 8082  |
+| payment           | 128    | 8000  |
+| core-domain       | 192    | 8080  |
+
+---
+
+## 7. ECS Deploy (Legado - substituído por K3s)
+
+Cluster ECS com 2 instâncias. **Migrado para K3s** - manter apenas para referência.
 
 ### 6.1 Buscar Cluster ECS
 
@@ -450,6 +503,50 @@ Cluster ECS com 2 instâncias, controle de memória por task. Substitua `{SERVIC
 | customer          | 192    | 64                |
 | payment           | 128    | 64                |
 | core-domain       | 192    | 64                |
+
+## 7. K3s Deploy (Fase 4 - Kubernetes leve em EC2)
+
+Cluster K3s em 2x t3.micro (1 server + 1 agent). Requisito: Kubernetes.
+
+### 7.1 Configurar kubeconfig
+
+```yaml
+- name: 'Configurar kubeconfig (K3s)'
+  run: |
+    KUBECONFIG=$(aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
+    if [ -z "$KUBECONFIG" ]; then
+      echo "::error::K3s kubeconfig não encontrado. Execute o App Infra primeiro."
+      exit 1
+    fi
+    mkdir -p ~/.kube
+    echo "$KUBECONFIG" > ~/.kube/config
+    chmod 600 ~/.kube/config
+    echo "KUBECONFIG=~/.kube/config" >> $GITHUB_ENV
+```
+
+### 7.2 imagePullSecret (GHCR)
+
+```yaml
+- name: 'Criar imagePullSecret (GHCR)'
+  run: |
+    kubectl create secret docker-registry ghcr-secret \
+      --docker-server=ghcr.io \
+      --docker-username=${{ github.actor }} \
+      --docker-password=${{ secrets.GITHUB_TOKEN }} \
+      --namespace=oficinapro-prod \
+      --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 7.3 Memória por serviço (K3s)
+
+| Serviço           | memory | Porta |
+|-------------------|--------|-------|
+| saga-orchestrator | 192Mi  | 8084  |
+| billing           | 192Mi  | 8081  |
+| execution         | 192Mi  | 8083  |
+| customer          | 192Mi  | 8082  |
+| payment           | 128Mi  | 8000  |
+| core-domain       | 192Mi  | 8080  |
 
 ---
 

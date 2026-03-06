@@ -1,56 +1,48 @@
-# Migração K3s → EKS (Fase 4)
+# Arquitetura Fase 4 - K3s em EC2
 
 ## Resumo
 
-O cluster Kubernetes foi migrado de **EC2 + K3s** para **EKS** (Elastic Kubernetes Service).
+O cluster usa **K3s** (versão mais leve de Kubernetes) em **EC2** (2x t3.micro).
+Kubernetes é requisito obrigatório; K3s atende com menor overhead que EKS ou K8s completo.
 
-## O que mudou
+## Arquitetura atual
 
-| Antes (K3s) | Depois (EKS) |
-|-------------|--------------|
-| EC2 com user_data bootstrap | Cluster gerenciado pela AWS |
-| SSH/SSM para deploy | `aws eks update-kubeconfig` + kubectl |
-| master_ip, Parameter Store kubeconfig | Cluster name em Parameter Store |
-| Verify: SSM/SSH/Parameter Store | Verify: kubectl get nodes |
+| Componente | Descrição |
+|------------|-----------|
+| **K3s** | Kubernetes leve (~50MB binary, SQLite, sem etcd separado) |
+| **EC2** | 2x t3.micro: 1 server (control plane) + 1 agent (worker) |
+| **Deploy** | kubeconfig no SSM `/oficinapro/k3s/kubeconfig` |
+| **Pipelines** | kubectl apply (ConfigMap, Secret, Deployment, Service) |
 
-## Pipelines atualizadas
+## Módulo Terraform
 
-- **OficinaPro-DevOps**: app-infra (EKS), database-init, apply-nodeport
-- **OficinaPro-Customer**: ci-cd-fase4
-- **OficinaPro-Billing**: ci-cd-fase4
-- **OficinaPro-Payments**: ci-cd-fase4
-- **OficinaPro-Execution**: ci-cd-fase4
+- **fase4/06-k3s/** - Cluster K3s (substitui 06-ecs)
+- SSM: `/oficinapro/k3s/master-ip`, `/oficinapro/k3s/kubeconfig`, `/oficinapro/k3s/bootstrap-status`
+
+## Pipelines atualizadas (deploy K3s)
+
+- **OficinaPro-DevOps**: app-infra (K3s)
 - **saga-orchestrator**: ci-cd-fase4
+- **OficinaPro-Billing**: ci-cd-fase4
+- **OficinaPro-Execution**: ci-cd-fase4
+- **OficinaPro-Customer**: ci-cd-fase4
+- **OficinaPro-Payments**: ci-cd-fase4
 - **OficinaPro-KaykeBauer** (core-domain): ci-cd-fase4
-
-## Workflows legados (não atualizados)
-
-- `bootstrap-kubeconfig.yml` (Customer) - obsoleto com EKS
-- `debug-k3s-cluster.yml` - marcado como legado; use action=debug no App Infra
 
 ## Ordem de execução
 
-1. **App Infra CI/CD** (action=apply) → Cria databases, messaging, EKS
-2. **Database Init** → Cria databases lógicos no RDS (job no EKS)
-3. **Deploy dos serviços** → saga, billing, execution, customer, payment, core-domain (ci-cd-fase4)
+1. **App Infra CI/CD** (action=apply) → databases, messaging, K3s cluster
+2. **Deploy dos serviços** → saga → billing → execution → customer → payment → core-domain
 
-## Parâmetro importante
+## Memória (2x t3.micro = ~768Mi/instância para workloads)
 
-- `/oficinapro/eks/cluster-name` = `oficinapro-fase4` (criado pelo Terraform EKS)
-
-## Free Tier (t3.micro - 1GB RAM)
-
-Recursos reduzidos ao mínimo para caber em 1 node t3.micro:
-
-| Serviço | Request | Limit | JAVA_TOOL_OPTIONS |
-|---------|---------|-------|-------------------|
-| saga-orchestrator | 64Mi / 50m | 192Mi / 250m | -Xmx96m -Xms48m |
-| billing | 80Mi / 50m | 192Mi / 250m | -Xmx96m -Xms48m |
-| execution | 80Mi / 50m | 192Mi / 250m | -Xmx96m -Xms48m |
-| customer | 80Mi / 50m | 192Mi / 250m | -Xmx96m -Xms48m |
-| payment (Python) | 64Mi / 50m | 128Mi / 250m | - |
-| core-domain | 80Mi / 50m | 192Mi / 250m | -Xmx96m -Xms48m |
-
-**Total requests:** ~448Mi (sistema ~400Mi = ~848Mi usado de 1024Mi)
+| Serviço | memory | Porta |
+|---------|--------|-------|
+| saga-orchestrator | 192Mi | 8084 |
+| billing | 192Mi | 8081 |
+| execution | 192Mi | 8083 |
+| customer | 192Mi | 8082 |
+| payment (Python) | 128Mi | 8000 |
+| core-domain | 192Mi | 8080 |
 
 **Ordem de deploy recomendada:** saga → billing → execution → customer → payment → core-domain
