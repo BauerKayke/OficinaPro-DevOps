@@ -47,16 +47,22 @@ jobs:
           # K3s (prioridade) ou EKS (fallback)
           KUBECONFIG_CONTENT=$(aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
           if [ -n "$KUBECONFIG_CONTENT" ]; then
-            echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
+            echo "$KUBECONFIG_CONTENT" | sed '/certificate-authority-data:/d' | sed '/insecure-skip-tls-verify/d' | sed '/server: https:/a\    insecure-skip-tls-verify: true' > /tmp/kubeconfig
             chmod 600 /tmp/kubeconfig
             export KUBECONFIG=/tmp/kubeconfig
             echo "KUBECONFIG=/tmp/kubeconfig" >> $GITHUB_ENV
             echo "📦 Usando cluster K3s"
+            for i in 1 2 3 4 5; do
+              echo "Tentativa $i/5 - kubectl get nodes..."
+              kubectl get nodes --request-timeout=60s 2>/dev/null && break
+              [ $i -lt 5 ] && echo "Aguardando 30s..." && sleep 30
+            done
+            kubectl get nodes || { echo "::error::Cluster não acessível após 5 tentativas"; exit 1; }
           else
             aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")"
             echo "📦 Usando cluster EKS"
+            kubectl get nodes || { echo "::error::Cluster não acessível"; exit 1; }
           fi
-          kubectl get nodes || { echo "::error::Cluster não acessível"; exit 1; }
 
       - name: 'Init Databases - Job no cluster'
         run: |

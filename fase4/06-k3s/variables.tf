@@ -17,7 +17,13 @@ variable "environment" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type (t3.micro Free Tier)"
+  description = "EC2 instance type do agent (t3.micro Free Tier)"
   type        = string
   default     = "t3.micro"
+}
+
+variable "server_instance_type" {
+  description = "EC2 instance type do server (t3.small recomendado - API responde TLS melhor)"
+  type        = string
+  default     = "t3.small"
 }

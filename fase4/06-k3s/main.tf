@@ -185,10 +185,10 @@ locals {
   })
 }
 
-# K3s Server
+# K3s Server (t3.small para API responder TLS de clientes remotos)
 resource "aws_instance" "k3s_server" {
   ami                    = data.aws_ami.ubuntu.id
-  instance_type           = var.instance_type
+  instance_type           = var.server_instance_type
   subnet_id               = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
   vpc_security_group_ids  = [aws_security_group.k3s.id]
   iam_instance_profile    = aws_iam_instance_profile.k3s.name
