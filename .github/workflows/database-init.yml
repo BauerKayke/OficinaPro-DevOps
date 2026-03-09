@@ -49,11 +49,10 @@ jobs:
           if [ -n "$KUBECONFIG_CONTENT" ]; then
             echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
             chmod 600 /tmp/kubeconfig
-            export KUBECONFIG=/tmp/kubeconfig
+            echo "KUBECONFIG=/tmp/kubeconfig" >> $GITHUB_ENV
             echo "📦 Usando cluster K3s"
           else
-            CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
-            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER"
+            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")"
             echo "📦 Usando cluster EKS"
           fi
           kubectl get nodes || { echo "::error::Cluster não acessível"; exit 1; }
