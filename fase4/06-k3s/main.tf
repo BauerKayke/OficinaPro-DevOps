@@ -53,6 +53,15 @@ data "terraform_remote_state" "messaging" {
   }
 }
 
+data "terraform_remote_state" "databases" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-oficinapro-ckm-tfstate"
+    key    = "fase4-optimized/databases/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 # Token para agentes se juntarem ao cluster
 resource "random_password" "k3s_token" {
   length  = 32
@@ -114,6 +123,17 @@ resource "aws_security_group" "k3s" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "${var.project_name}-k3s-cluster-sg-fase4" }
+}
+
+# Regra RDS: permitir K3s (pods) acessarem PostgreSQL
+resource "aws_security_group_rule" "rds_from_k3s" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.k3s.id
+  security_group_id        = data.terraform_remote_state.databases.outputs.rds_security_group_id
+  description              = "PostgreSQL from K3s cluster (pods)"
 }
 
 # IAM Role K3s (sufixo -cluster para não conflitar com 04-compute)

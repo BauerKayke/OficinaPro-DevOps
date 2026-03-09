@@ -9,8 +9,14 @@ report() {
 }
 
 apt-get update
-apt-get install -y curl awscli
+apt-get install -y curl awscli wget
 report "deps_ready"
+
+# SSM Agent para Session Manager (instância precisa da IAM role com AmazonSSMManagedInstanceCore)
+cd /tmp
+wget -q "https://s3.us-east-1.amazonaws.com/amazon-ssm-us-east-1/latest/debian_amd64/amazon-ssm-agent.deb" 2>/dev/null && \
+  (dpkg -i amazon-ssm-agent.deb 2>/dev/null || apt-get install -f -y) && \
+  systemctl enable amazon-ssm-agent && systemctl start amazon-ssm-agent || true
 
 hostnamectl set-hostname ${hostname}
 
