@@ -49,6 +49,7 @@ jobs:
           if [ -n "$KUBECONFIG_CONTENT" ]; then
             echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
             chmod 600 /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
             echo "KUBECONFIG=/tmp/kubeconfig" >> $GITHUB_ENV
             echo "📦 Usando cluster K3s"
           else
