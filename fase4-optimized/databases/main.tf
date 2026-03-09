@@ -65,6 +65,14 @@ resource "aws_security_group" "rds" {
     cidr_blocks = [data.terraform_remote_state.network.outputs.vpc_cidr]
     description = "PostgreSQL access from VPC"
   }
+  # K3s pod CIDR (Flannel 10.42.0.0/16) - pods usam IPs fora do VPC CIDR
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["10.42.0.0/16"]
+    description = "PostgreSQL from K3s pods (Flannel CIDR)"
+  }
 
   egress {
     from_port   = 0

@@ -1,6 +1,6 @@
 # Database Init - Cria databases lógicos no RDS consolidado
-# Sequência: App Infra CI/CD (EKS success) → database-init → deploys dos serviços
-# Usa EKS: aws eks update-kubeconfig + kubectl
+# Sequência: App Infra CI/CD (K3s) → database-init → deploys dos serviços
+# Suporta K3s (prioridade) e EKS (fallback)
 
 name: 'OficinaPro - Database Initialization'
 
@@ -32,7 +32,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: 'Buscar RDS e Configurar kubectl (EKS)'
+      - name: 'Buscar RDS e Configurar kubectl (K3s ou EKS)'
         id: infra
         run: |
           RDS_HOST=$(aws rds describe-db-instances --db-instance-identifier oficinapro-consolidated-db --query 'DBInstances[0].Endpoint.Address' --output text 2>/dev/null || echo "")
@@ -40,15 +40,27 @@ jobs:
           [ -z "$RDS_HOST" ] || [ "$RDS_HOST" == "None" ] && { echo "::error::RDS não encontrado"; exit 1; }
           echo "rds_host=${RDS_HOST}" >> $GITHUB_OUTPUT
           echo "✅ RDS: ${RDS_HOST}"
-          CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
-          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER"
+          
           curl -sLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-          kubectl get nodes || { echo "::error::EKS cluster não acessível"; exit 1; }
+          
+          # K3s (prioridade) ou EKS (fallback)
+          KUBECONFIG_CONTENT=$(aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
+          if [ -n "$KUBECONFIG_CONTENT" ]; then
+            echo "$KUBECONFIG_CONTENT" > /tmp/kubeconfig
+            chmod 600 /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+            echo "📦 Usando cluster K3s"
+          else
+            CLUSTER=$(aws ssm get-parameter --name "/oficinapro/eks/cluster-name" --query "Parameter.Value" --output text 2>/dev/null || echo "oficinapro-fase4")
+            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER"
+            echo "📦 Usando cluster EKS"
+          fi
+          kubectl get nodes || { echo "::error::Cluster não acessível"; exit 1; }
 
-      - name: 'Init Databases - Job no EKS'
+      - name: 'Init Databases - Job no cluster'
         run: |
-          echo "📋 Init via kubectl (EKS)"
+          echo "📋 Init via kubectl"
           kubectl create namespace oficinapro-prod --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret generic db-init-secret --from-literal=password="${{ secrets.DB_PASSWORD }}" -n oficinapro-prod --dry-run=client -o yaml | kubectl apply -f -
           
