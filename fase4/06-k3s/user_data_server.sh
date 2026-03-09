@@ -33,10 +33,11 @@ report "k3s_ready"
 
 kubectl create namespace oficinapro-prod 2>/dev/null || true
 
-# Kubeconfig no Parameter Store (para pipelines kubectl)
+# Kubeconfig no Parameter Store (para pipelines/kubectl remoto - cert autoassinado)
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "")
 if [ -n "$PUBLIC_IP" ] && [ -f /etc/rancher/k3s/k3s.yaml ]; then
-  KUBECONFIG_CONTENT=$(sed "s/127.0.0.1/$PUBLIC_IP/g" /etc/rancher/k3s/k3s.yaml)
+  KUBECONFIG_CONTENT=$(sed "s/127.0.0.1/$PUBLIC_IP/g" /etc/rancher/k3s/k3s.yaml | \
+    sed '/server: https:/a\    insecure-skip-tls-verify: true')
   aws ssm put-parameter --name "/oficinapro/k3s/kubeconfig" \
     --value "$KUBECONFIG_CONTENT" \
     --type "SecureString" \
