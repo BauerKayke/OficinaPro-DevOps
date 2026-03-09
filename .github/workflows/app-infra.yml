@@ -107,10 +107,14 @@ jobs:
           if [ -n "$MASTER_IP" ]; then
             KUBECONFIG=$(aws ssm get-parameter --name "/oficinapro/k3s/kubeconfig" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
             if [ -n "$KUBECONFIG" ]; then
-              echo "$KUBECONFIG" > /tmp/kubeconfig
+              echo "$KUBECONFIG" | sed '/certificate-authority-data:/d' | sed '/insecure-skip-tls-verify/d' | sed '/server: https:/a\    insecure-skip-tls-verify: true' > /tmp/kubeconfig
               export KUBECONFIG=/tmp/kubeconfig
-              kubectl get nodes 2>/dev/null || echo "kubectl não disponível ou cluster não pronto"
+              echo "--- Nodes ---"
+              kubectl get nodes 2>/dev/null || echo "kubectl falhou"
+              echo "--- Pods oficinapro-prod ---"
               kubectl get pods -n oficinapro-prod 2>/dev/null || true
+              echo "--- Deployments oficinapro-prod ---"
+              kubectl get deployment -n oficinapro-prod 2>/dev/null || true
             fi
           fi
 
